@@ -82,8 +82,52 @@ function getDownloadUrl(): string {
   return passwordVerified.value ? `${base}?verified=true` : base;
 }
 
-function download() {
-  window.location.href = getDownloadUrl();
+async function download() {
+  try {
+    error.value = '';
+    const response = await fetch(getDownloadUrl(), {
+      method: 'GET',
+      credentials: 'same-origin'
+    });
+    
+    if (!response.ok) {
+      const contentType = response.headers.get('Content-Type');
+      let errorMessage = 'Download failed';
+      
+      if (contentType?.includes('application/json')) {
+        const errorData = await response.json().catch(() => ({ message: 'Download failed' }));
+        errorMessage = errorData.message || errorMessage;
+      } else {
+        errorMessage = `Download failed: ${response.status} ${response.statusText}`;
+      }
+      
+      throw new Error(errorMessage);
+    }
+    
+    const blob = await response.blob();
+    
+    if (blob.size === 0) {
+      throw new Error('Downloaded file is empty');
+    }
+    
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = shareInfo.value?.file_name || 'download';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    
+    // 延迟清理，确保下载开始
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+    
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'Failed to download file';
+    console.error('Download error:', e);
+  }
 }
 </script>
 
