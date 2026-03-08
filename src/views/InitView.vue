@@ -162,20 +162,20 @@ function goToLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #0f172a;
   padding: 20px;
 }
 
 .loading {
-  color: white;
+  color: #e5e5e5;
   font-size: 18px;
 }
 
 .init-form, .success-panel {
-  background: white;
+  background: #fff;
   padding: 40px;
   border-radius: 12px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
   width: 100%;
   max-width: 420px;
 }
@@ -183,7 +183,7 @@ function goToLogin() {
 h1 {
   margin: 0 0 8px;
   font-size: 24px;
-  color: #1a1a2e;
+  color: #1e40af;
 }
 
 .subtitle {
@@ -214,7 +214,8 @@ h1 {
 
 .form-group input:focus {
   outline: none;
-  border-color: #667eea;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
 .form-group input:disabled {
@@ -222,8 +223,8 @@ h1 {
 }
 
 .error {
-  background: #fee;
-  color: #c00;
+  background: #fef2f2;
+  color: #991b1b;
   padding: 12px;
   border-radius: 8px;
   margin-bottom: 20px;
@@ -233,18 +234,19 @@ h1 {
 .submit-btn, .primary-btn {
   width: 100%;
   padding: 14px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: #1e40af;
+  color: #fff;
   border: none;
   border-radius: 8px;
   font-size: 16px;
   font-weight: 500;
   cursor: pointer;
-  transition: opacity 0.2s;
+  transition: background 0.2s, transform 0.2s;
 }
 
 .submit-btn:hover:not(:disabled), .primary-btn:hover {
-  opacity: 0.9;
+  background: #1e3a8a;
+  transform: translateY(-1px);
 }
 
 .submit-btn:disabled {
@@ -259,8 +261,8 @@ h1 {
 .success-icon {
   width: 64px;
   height: 64px;
-  background: #4caf50;
-  color: white;
+  background: #22c55e;
+  color: #fff;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -294,8 +296,8 @@ h1 {
 
 .copy-btn {
   padding: 6px 12px;
-  background: #667eea;
-  color: white;
+  background: #1e40af;
+  color: #fff;
   border: none;
   border-radius: 4px;
   cursor: pointer;
@@ -303,7 +305,7 @@ h1 {
 }
 
 .copy-btn:hover {
-  background: #5a6fd6;
+  background: #1e3a8a;
 }
 
 .hint {

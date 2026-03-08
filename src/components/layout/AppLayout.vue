@@ -23,7 +23,7 @@ const uiStore = useUIStore();
 <style scoped>
 .app-layout {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: #f1f5f9;
 }
 
 .main-content {
@@ -49,18 +49,18 @@ const uiStore = useUIStore();
 }
 
 .toast.success {
-  background: #10b981;
-  color: white;
+  background: #1e40af;
+  color: #fff;
 }
 
 .toast.error {
-  background: #ef4444;
-  color: white;
+  background: #0f172a;
+  color: #fff;
 }
 
 .toast.info {
   background: #3b82f6;
-  color: white;
+  color: #fff;
 }
 
 @keyframes slideUp {

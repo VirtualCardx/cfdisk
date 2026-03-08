@@ -165,8 +165,8 @@ function isExpired(share: ShareItem): boolean {
   align-items: center;
   justify-content: center;
   min-height: 400px;
-  color: #9ca3af;
-  background: white;
+  color: #94a3b8;
+  background: #fff;
   border-radius: 12px;
 }
 
@@ -180,7 +180,7 @@ function isExpired(share: ShareItem): boolean {
 }
 
 .shares-list {
-  background: white;
+  background: #fff;
   border-radius: 12px;
   overflow: hidden;
 }
@@ -190,7 +190,7 @@ function isExpired(share: ShareItem): boolean {
   align-items: center;
   gap: 1rem;
   padding: 1rem 1.5rem;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .share-item:last-child {
@@ -202,7 +202,7 @@ function isExpired(share: ShareItem): boolean {
 }
 
 .share-icon {
-  color: #9ca3af;
+  color: #3b82f6;
 }
 
 .share-info {
@@ -223,13 +223,13 @@ function isExpired(share: ShareItem): boolean {
   gap: 0.5rem;
   align-items: center;
   font-size: 0.75rem;
-  color: #9ca3af;
+  color: #94a3b8;
   margin-top: 0.25rem;
   flex-wrap: wrap;
 }
 
 .badge {
-  background: #e5e7eb;
+  background: #f1f5f9;
   padding: 0.125rem 0.5rem;
   border-radius: 4px;
   font-size: 0.7rem;
@@ -237,8 +237,8 @@ function isExpired(share: ShareItem): boolean {
 }
 
 .badge.expired {
-  background: #fee2e2;
-  color: #dc2626;
+  background: #e2e8f0;
+  color: #64748b;
 }
 
 .share-url {
@@ -249,38 +249,38 @@ function isExpired(share: ShareItem): boolean {
 .share-url input {
   width: 200px;
   padding: 0.375rem 0.625rem;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #e2e8f0;
   border-radius: 6px;
   font-size: 0.75rem;
   font-family: monospace;
-  background: #f9fafb;
+  background: #f8fafc;
 }
 
 .share-url button {
-  background: white;
-  border: 1px solid #e5e7eb;
+  background: #fff;
+  border: 1px solid #e2e8f0;
   padding: 0.375rem;
   border-radius: 6px;
   cursor: pointer;
-  color: #6b7280;
+  color: #1e40af;
 }
 
 .share-url button:hover {
-  background: #f9fafb;
+  background: #f1f5f9;
 }
 
 .btn-secondary {
-  background: white;
-  color: #374151;
-  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #334155;
+  border: 1px solid #e2e8f0;
   padding: 0.5rem 1rem;
   border-radius: 6px;
   cursor: pointer;
 }
 
 .btn-danger {
-  background: #ef4444;
-  color: white;
+  background: #333;
+  color: #fff;
   border: none;
   padding: 0.5rem 1rem;
   border-radius: 6px;
@@ -288,9 +288,9 @@ function isExpired(share: ShareItem): boolean {
 }
 
 .btn-danger-outline {
-  background: white;
-  color: #ef4444;
-  border: 1px solid #ef4444;
+  background: #fff;
+  color: #333;
+  border: 1px solid #666;
   padding: 0.5rem 1rem;
   border-radius: 6px;
   cursor: pointer;
@@ -308,7 +308,7 @@ function isExpired(share: ShareItem): boolean {
 }
 
 .modal {
-  background: white;
+  background: #fff;
   border-radius: 12px;
   padding: 1.5rem;
   width: 90%;
@@ -320,7 +320,7 @@ function isExpired(share: ShareItem): boolean {
 }
 
 .modal p {
-  color: #6b7280;
+  color: #666;
   margin-bottom: 1.5rem;
 }
 

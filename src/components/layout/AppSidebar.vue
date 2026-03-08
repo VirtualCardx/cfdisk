@@ -105,8 +105,8 @@ async function handleLogout() {
 .sidebar {
   width: 260px;
   height: 100vh;
-  background: #1a1a2e;
-  color: white;
+  background: #0f172a;
+  color: #e5e5e5;
   display: flex;
   flex-direction: column;
   transition: width 0.3s ease;
@@ -132,22 +132,19 @@ async function handleLogout() {
   align-items: center;
   justify-content: space-between;
   padding: 1rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid #1e3a8a;
 }
 
 .logo {
   font-size: 1.5rem;
   font-weight: 700;
-  background: linear-gradient(135deg, #667eea, #764ba2);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: #3b82f6;
 }
 
 .toggle-btn {
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.7);
+  color: #94a3b8;
   cursor: pointer;
   padding: 0.5rem;
   border-radius: 8px;
@@ -155,7 +152,8 @@ async function handleLogout() {
 }
 
 .toggle-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: #1e3a8a;
+  color: #fff;
 }
 
 .sidebar-nav {
@@ -171,25 +169,25 @@ async function handleLogout() {
   align-items: center;
   gap: 0.75rem;
   padding: 0.75rem 1rem;
-  color: rgba(255, 255, 255, 0.7);
+  color: #94a3b8;
   text-decoration: none;
   border-radius: 8px;
   transition: all 0.2s;
 }
 
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: white;
+  background: #1e3a8a;
+  color: #fff;
 }
 
 .nav-item.active {
-  background: linear-gradient(135deg, #667eea, #764ba2);
-  color: white;
+  background: #1e40af;
+  color: #fff;
 }
 
 .sidebar-footer {
   padding: 1rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid #1e3a8a;
 }
 
 .storage-info {
@@ -200,27 +198,27 @@ async function handleLogout() {
   display: flex;
   justify-content: space-between;
   font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.7);
+  color: #94a3b8;
   margin-bottom: 0.5rem;
 }
 
 .storage-bar {
   height: 4px;
-  background: rgba(255, 255, 255, 0.1);
+  background: #1e3a8a;
   border-radius: 2px;
   overflow: hidden;
 }
 
 .storage-fill {
   height: 100%;
-  background: linear-gradient(90deg, #667eea, #764ba2);
+  background: #3b82f6;
   border-radius: 2px;
   transition: width 0.3s;
 }
 
 .storage-text {
   font-size: 0.7rem;
-  color: rgba(255, 255, 255, 0.5);
+  color: #64748b;
   margin-top: 0.25rem;
 }
 
@@ -233,7 +231,7 @@ async function handleLogout() {
 .user-avatar {
   width: 36px;
   height: 36px;
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  background: #1e40af;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -259,14 +257,14 @@ async function handleLogout() {
 
 .user-role {
   font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.5);
+  color: #64748b;
   text-transform: capitalize;
 }
 
 .logout-btn {
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.7);
+  color: #94a3b8;
   cursor: pointer;
   padding: 0.5rem;
   border-radius: 8px;
@@ -274,7 +272,7 @@ async function handleLogout() {
 }
 
 .logout-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #ef4444;
+  background: #1e3a8a;
+  color: #fff;
 }
 </style>

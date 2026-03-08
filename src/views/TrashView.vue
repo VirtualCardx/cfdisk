@@ -191,8 +191,8 @@ function formatDate(timestamp: number): string {
   align-items: center;
   justify-content: center;
   min-height: 400px;
-  color: #9ca3af;
-  background: white;
+  color: #94a3b8;
+  background: #fff;
   border-radius: 12px;
 }
 
@@ -201,7 +201,7 @@ function formatDate(timestamp: number): string {
 }
 
 .trash-list {
-  background: white;
+  background: #fff;
   border-radius: 12px;
   overflow: hidden;
 }
@@ -211,7 +211,7 @@ function formatDate(timestamp: number): string {
   align-items: center;
   gap: 1rem;
   padding: 1rem 1.5rem;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .trash-item:last-child {
@@ -219,7 +219,7 @@ function formatDate(timestamp: number): string {
 }
 
 .item-icon {
-  color: #9ca3af;
+  color: #94a3b8;
 }
 
 .item-info {
@@ -237,7 +237,7 @@ function formatDate(timestamp: number): string {
 
 .item-meta {
   font-size: 0.875rem;
-  color: #9ca3af;
+  color: #94a3b8;
 }
 
 .item-actions {
@@ -246,9 +246,9 @@ function formatDate(timestamp: number): string {
 }
 
 .btn-secondary {
-  background: white;
-  color: #374151;
-  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #334155;
+  border: 1px solid #e2e8f0;
   padding: 0.5rem 1rem;
   border-radius: 6px;
   cursor: pointer;
@@ -256,8 +256,8 @@ function formatDate(timestamp: number): string {
 }
 
 .btn-danger {
-  background: #ef4444;
-  color: white;
+  background: #dc2626;
+  color: #fff;
   border: none;
   padding: 0.5rem 1rem;
   border-radius: 6px;
@@ -266,9 +266,9 @@ function formatDate(timestamp: number): string {
 }
 
 .btn-danger-outline {
-  background: white;
-  color: #ef4444;
-  border: 1px solid #ef4444;
+  background: #fff;
+  color: #dc2626;
+  border: 1px solid #dc2626;
   padding: 0.5rem 1rem;
   border-radius: 6px;
   cursor: pointer;
@@ -286,7 +286,7 @@ function formatDate(timestamp: number): string {
 }
 
 .modal {
-  background: white;
+  background: #fff;
   border-radius: 12px;
   padding: 1.5rem;
   width: 90%;
@@ -298,7 +298,7 @@ function formatDate(timestamp: number): string {
 }
 
 .modal p {
-  color: #6b7280;
+  color: #666;
   margin-bottom: 1.5rem;
 }
 

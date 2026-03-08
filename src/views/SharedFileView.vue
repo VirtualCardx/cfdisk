@@ -21,6 +21,8 @@ const error = ref('');
 const password = ref('');
 const passwordVerified = ref(false);
 const passwordError = ref('');
+const downloadProgress = ref(0);
+const isDownloading = ref(false);
 
 onMounted(() => {
   loadShareInfo();
@@ -85,6 +87,9 @@ function getDownloadUrl(): string {
 async function download() {
   try {
     error.value = '';
+    isDownloading.value = true;
+    downloadProgress.value = 0;
+    
     const response = await fetch(getDownloadUrl(), {
       method: 'GET',
       credentials: 'same-origin'
@@ -104,7 +109,43 @@ async function download() {
       throw new Error(errorMessage);
     }
     
-    const blob = await response.blob();
+    // 获取文件总大小
+    const contentLength = response.headers.get('Content-Length');
+    const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
+    
+    if (!response.body) {
+      throw new Error('No response body');
+    }
+    
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let receivedSize = 0;
+    
+    // 读取数据流并更新进度
+    while (true) {
+      const { done, value } = await reader.read();
+      
+      if (done) {
+        break;
+      }
+      
+      chunks.push(value);
+      receivedSize += value.length;
+      
+      if (totalSize > 0) {
+        downloadProgress.value = Math.round((receivedSize / totalSize) * 100);
+      }
+    }
+    
+    // 合并所有 chunks
+    const allChunks = new Uint8Array(receivedSize);
+    let position = 0;
+    for (const chunk of chunks) {
+      allChunks.set(chunk, position);
+      position += chunk.length;
+    }
+    
+    const blob = new Blob([allChunks]);
     
     if (blob.size === 0) {
       throw new Error('Downloaded file is empty');
@@ -124,9 +165,13 @@ async function download() {
       URL.revokeObjectURL(url);
     }, 100);
     
+    downloadProgress.value = 100;
+    
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'Failed to download file';
     console.error('Download error:', e);
+  } finally {
+    isDownloading.value = false;
   }
 }
 </script>
@@ -171,12 +216,29 @@ async function download() {
           </div>
         </div>
 
-        <button class="btn-primary download-btn" @click="download">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <button class="btn-primary download-btn" @click="download" :disabled="isDownloading">
+          <svg v-if="!isDownloading" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
           </svg>
-          Download
+          <svg v-else class="spinner" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20"/>
+          </svg>
+          {{ isDownloading ? '下载中...' : '下载文件' }}
         </button>
+        
+        <!-- 下载进度条 -->
+        <div v-if="isDownloading" class="download-progress-container">
+          <div class="download-progress-bar">
+            <div class="download-progress-fill" :style="{ width: `${downloadProgress}%` }"></div>
+          </div>
+          <div class="download-progress-text">{{ downloadProgress }}%</div>
+        </div>
+        <div v-else-if="downloadProgress === 100" class="download-success">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          下载完成
+        </div>
       </div>
     </div>
   </div>
@@ -188,17 +250,17 @@ async function download() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #0f172a;
   padding: 1rem;
 }
 
 .shared-card {
-  background: white;
+  background: #fff;
   border-radius: 16px;
   padding: 2rem;
   width: 100%;
   max-width: 600px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
 }
 
 .logo {
@@ -206,22 +268,19 @@ async function download() {
   font-weight: 700;
   text-align: center;
   margin-bottom: 1.5rem;
-  background: linear-gradient(135deg, #667eea, #764ba2);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: #1e40af;
 }
 
 .loading {
   text-align: center;
   padding: 3rem;
-  color: #9ca3af;
+  color: #94a3b8;
 }
 
 .error-state {
   text-align: center;
   padding: 2rem;
-  color: #ef4444;
+  color: #dc2626;
 }
 
 .error-state svg {
@@ -238,7 +297,7 @@ async function download() {
 }
 
 .password-form .file-name {
-  color: #6b7280;
+  color: #64748b;
   margin-bottom: 1.5rem;
   word-break: break-all;
 }
@@ -246,14 +305,14 @@ async function download() {
 .password-form input {
   width: 100%;
   padding: 0.875rem;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #e2e8f0;
   border-radius: 8px;
   font-size: 1rem;
   margin-bottom: 1rem;
 }
 
 .password-error {
-  color: #ef4444;
+  color: #dc2626;
   font-size: 0.875rem;
   margin-bottom: 1rem;
 }
@@ -267,12 +326,12 @@ async function download() {
 
 .file-meta {
   text-align: center;
-  color: #9ca3af;
+  color: #94a3b8;
   margin-bottom: 1.5rem;
 }
 
 .preview-area {
-  background: #f9fafb;
+  background: #f1f5f9;
   border-radius: 12px;
   overflow: hidden;
   margin-bottom: 1.5rem;
@@ -296,7 +355,7 @@ async function download() {
 .no-preview {
   text-align: center;
   padding: 3rem;
-  color: #9ca3af;
+  color: #94a3b8;
 }
 
 .no-preview svg {
@@ -304,8 +363,8 @@ async function download() {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: #1e40af;
+  color: #fff;
   border: none;
   padding: 0.875rem 1.5rem;
   border-radius: 8px;
@@ -317,9 +376,69 @@ async function download() {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+  transition: background 0.2s;
 }
 
-.btn-primary:hover {
-  opacity: 0.9;
+.btn-primary:hover:not(:disabled) {
+  background: #1e3a8a;
+}
+
+.btn-primary:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.download-progress-container {
+  margin-top: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.download-progress-bar {
+  flex: 1;
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.download-progress-fill {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.download-progress-text {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #3b82f6;
+  min-width: 40px;
+  text-align: right;
+}
+
+.download-success {
+  margin-top: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: #22c55e;
+  font-size: 0.875rem;
+  font-weight: 500;
 }
 </style>

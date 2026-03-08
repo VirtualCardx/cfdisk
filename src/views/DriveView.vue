@@ -88,13 +88,43 @@ function formatDate(timestamp: number): string {
 function getFileIcon(file: FileItem): string {
   if (file.type === 'folder') return 'folder';
   const mime = file.mime_type || '';
+  const name = file.name.toLowerCase();
+  
+  // 图片
   if (mime.startsWith('image/')) return 'image';
+  
+  // 视频
   if (mime.startsWith('video/')) return 'video';
+  
+  // 音频
   if (mime.startsWith('audio/')) return 'audio';
+  
+  // PDF
   if (mime.includes('pdf')) return 'pdf';
-  if (mime.includes('word') || mime.includes('document')) return 'doc';
-  if (mime.includes('sheet') || mime.includes('excel')) return 'sheet';
-  if (mime.startsWith('text/') || mime.includes('json')) return 'text';
+  
+  // Word 文档
+  if (mime.includes('word') || mime.includes('document') || 
+      name.endsWith('.doc') || name.endsWith('.docx')) return 'doc';
+  
+  // Excel 表格
+  if (mime.includes('sheet') || mime.includes('excel') || 
+      name.endsWith('.xls') || name.endsWith('.xlsx') || name.endsWith('.csv')) return 'sheet';
+  
+  // 文本文件
+  if (mime.startsWith('text/') || mime.includes('json') || 
+      name.endsWith('.txt') || name.endsWith('.md') || name.endsWith('.log')) return 'text';
+  
+  // 压缩包
+  if (mime.includes('zip') || mime.includes('compressed') || mime.includes('archive') ||
+      name.endsWith('.zip') || name.endsWith('.rar') || name.endsWith('.7z') || 
+      name.endsWith('.tar') || name.endsWith('.gz') || name.endsWith('.bz2')) return 'archive';
+  
+  // 代码文件
+  const codeExtensions = ['.js', '.ts', '.jsx', '.tsx', '.vue', '.html', '.css', '.scss', 
+                          '.py', '.java', '.cpp', '.c', '.h', '.go', '.rs', '.php', 
+                          '.rb', '.swift', '.kt', '.sql', '.sh', '.bash', '.yaml', '.yml'];
+  if (codeExtensions.some(ext => name.endsWith(ext))) return 'code';
+  
   return 'file';
 }
 
@@ -267,9 +297,76 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
             @contextmenu="handleContextMenu($event, file)"
           >
             <div class="file-icon" :class="getFileIcon(file)">
+              <!-- 文件夹 -->
               <svg v-if="file.type === 'folder'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
               </svg>
+              <!-- 图片 -->
+              <svg v-else-if="getFileIcon(file) === 'image'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <polyline points="21 15 16 10 5 21"/>
+              </svg>
+              <!-- 视频 -->
+              <svg v-else-if="getFileIcon(file) === 'video'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+                <line x1="7" y1="2" x2="7" y2="22"/>
+                <line x1="17" y1="2" x2="17" y2="22"/>
+                <line x1="2" y1="12" x2="22" y2="12"/>
+                <line x1="2" y1="7" x2="7" y2="7"/>
+                <line x1="2" y1="17" x2="7" y2="17"/>
+                <line x1="17" y1="17" x2="22" y2="17"/>
+                <line x1="17" y1="7" x2="22" y2="7"/>
+              </svg>
+              <!-- 音频 -->
+              <svg v-else-if="getFileIcon(file) === 'audio'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M9 18V5l12-2v13"/>
+                <circle cx="6" cy="18" r="3"/>
+                <circle cx="18" cy="16" r="3"/>
+              </svg>
+              <!-- PDF -->
+              <svg v-else-if="getFileIcon(file) === 'pdf'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <path d="M10 13l-2 2 2 2"/>
+                <path d="M14 13l2 2-2 2"/>
+              </svg>
+              <!-- 文档 -->
+              <svg v-else-if="getFileIcon(file) === 'doc'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+                <polyline points="10 9 9 9 8 9"/>
+              </svg>
+              <!-- 表格 -->
+              <svg v-else-if="getFileIcon(file) === 'sheet'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="8" y1="13" x2="16" y2="13"/>
+                <line x1="8" y1="17" x2="16" y2="17"/>
+                <line x1="10" y1="9" x2="8" y2="9"/>
+              </svg>
+              <!-- 文本 -->
+              <svg v-else-if="getFileIcon(file) === 'text'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+                <line x1="10" y1="9" x2="8" y2="9"/>
+              </svg>
+              <!-- 压缩包 -->
+              <svg v-else-if="getFileIcon(file) === 'archive'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M21 8v13H3V8"/>
+                <path d="M1 3h22v5H1z"/>
+                <path d="M10 12h4"/>
+              </svg>
+              <!-- 代码文件 -->
+              <svg v-else-if="getFileIcon(file) === 'code'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <polyline points="16 18 22 12 16 6"/>
+                <polyline points="8 6 2 12 8 18"/>
+              </svg>
+              <!-- 默认文件 -->
               <svg v-else xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/>
               </svg>
@@ -425,20 +522,20 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 }
 
 .breadcrumb-sep {
-  color: #9ca3af;
+  color: #94a3b8;
 }
 
 .breadcrumb-item {
-  color: #6b7280;
+  color: #64748b;
   text-decoration: none;
 }
 
 .breadcrumb-item:hover {
-  color: #374151;
+  color: #1e40af;
 }
 
 .breadcrumb-item.active {
-  color: #111827;
+  color: #0f172a;
   font-weight: 600;
 }
 
@@ -448,23 +545,23 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 }
 
 .btn-icon {
-  background: white;
-  border: 1px solid #e5e7eb;
+  background: #fff;
+  border: 1px solid #cbd5e1;
   padding: 0.625rem;
   border-radius: 8px;
   cursor: pointer;
-  color: #6b7280;
+  color: #64748b;
   transition: all 0.2s;
 }
 
 .btn-icon:hover {
-  background: #f9fafb;
-  color: #374151;
+  background: #f1f5f9;
+  color: #1e40af;
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: #1e40af;
+  color: #fff;
   border: none;
   padding: 0.625rem 1.25rem;
   border-radius: 8px;
@@ -473,17 +570,17 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  transition: opacity 0.2s;
+  transition: background 0.2s;
 }
 
 .btn-primary:hover {
-  opacity: 0.9;
+  background: #1e3a8a;
 }
 
 .btn-secondary {
-  background: white;
-  color: #374151;
-  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #334155;
+  border: 1px solid #cbd5e1;
   padding: 0.625rem 1.25rem;
   border-radius: 8px;
   font-weight: 500;
@@ -491,8 +588,8 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 }
 
 .btn-danger {
-  background: #ef4444;
-  color: white;
+  background: #dc2626;
+  color: #fff;
   border: none;
   padding: 0.625rem 1.25rem;
   border-radius: 8px;
@@ -501,7 +598,7 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 }
 
 .file-area {
-  background: white;
+  background: #fff;
   border-radius: 12px;
   min-height: 500px;
   border: 2px dashed transparent;
@@ -509,8 +606,8 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 }
 
 .file-area.drag-over {
-  border-color: #667eea;
-  background: #f5f3ff;
+  border-color: #3b82f6;
+  background: #eff6ff;
 }
 
 .loading, .empty-state {
@@ -519,7 +616,7 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   align-items: center;
   justify-content: center;
   min-height: 400px;
-  color: #9ca3af;
+  color: #94a3b8;
 }
 
 .empty-state svg {
@@ -539,7 +636,7 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 }
 
 .file-item {
-  background: #f9fafb;
+  background: #f8fafc;
   border-radius: 12px;
   padding: 1rem;
   cursor: pointer;
@@ -548,13 +645,13 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 }
 
 .file-item:hover {
-  background: #f3f4f6;
+  background: #e0f2fe;
   transform: translateY(-2px);
 }
 
 .file-item.selected {
-  background: #ede9fe;
-  box-shadow: 0 0 0 2px #8b5cf6;
+  background: #dbeafe;
+  box-shadow: 0 0 0 2px #3b82f6;
 }
 
 .file-icon {
@@ -564,19 +661,47 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 }
 
 .file-icon.folder svg {
-  color: #fbbf24;
+  color: #f59e0b;
 }
 
 .file-icon.image svg {
-  color: #10b981;
+  color: #3b82f6;
 }
 
 .file-icon.video svg {
   color: #ef4444;
 }
 
+.file-icon.audio svg {
+  color: #8b5cf6;
+}
+
+.file-icon.pdf svg {
+  color: #f97316;
+}
+
+.file-icon.doc svg {
+  color: #2563eb;
+}
+
+.file-icon.sheet svg {
+  color: #22c55e;
+}
+
 .file-icon.text svg {
-  color: #3b82f6;
+  color: #64748b;
+}
+
+.file-icon.archive svg {
+  color: #f59e0b;
+}
+
+.file-icon.code svg {
+  color: #0f172a;
+}
+
+.file-icon.file svg {
+  color: #94a3b8;
 }
 
 .file-name {
@@ -592,7 +717,7 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   display: flex;
   justify-content: space-between;
   font-size: 0.75rem;
-  color: #9ca3af;
+  color: #94a3b8;
 }
 
 .file-actions {
@@ -610,21 +735,21 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 }
 
 .file-actions button {
-  background: white;
+  background: #fff;
   border: none;
   padding: 0.375rem;
   border-radius: 6px;
   cursor: pointer;
-  color: #6b7280;
+  color: #64748b;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .file-actions button:hover {
-  color: #374151;
+  color: #1e40af;
 }
 
 .file-actions .delete-btn:hover {
-  color: #ef4444;
+  color: #dc2626;
 }
 
 .upload-panel {
@@ -632,7 +757,7 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   bottom: 1.5rem;
   right: 1.5rem;
   width: 320px;
-  background: white;
+  background: #fff;
   border-radius: 12px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
   overflow: hidden;
@@ -643,15 +768,15 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   justify-content: space-between;
   align-items: center;
   padding: 0.875rem 1rem;
-  background: #f9fafb;
-  border-bottom: 1px solid #e5e7eb;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
   font-weight: 500;
 }
 
 .upload-header button {
   background: none;
   border: none;
-  color: #667eea;
+  color: #1e40af;
   cursor: pointer;
   font-size: 0.75rem;
 }
@@ -666,7 +791,7 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   align-items: center;
   gap: 0.75rem;
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid #eee;
 }
 
 .upload-name {
@@ -680,14 +805,14 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 .upload-progress {
   width: 60px;
   height: 4px;
-  background: #e5e7eb;
+  background: #e2e8f0;
   border-radius: 2px;
   overflow: hidden;
 }
 
 .upload-bar {
   height: 100%;
-  background: linear-gradient(90deg, #667eea, #764ba2);
+  background: #3b82f6;
   transition: width 0.3s;
 }
 
@@ -698,11 +823,11 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 }
 
 .upload-status.completed {
-  color: #10b981;
+  color: #22c55e;
 }
 
 .upload-status.error {
-  color: #ef4444;
+  color: #dc2626;
 }
 
 .modal-overlay {
@@ -716,7 +841,7 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 }
 
 .modal {
-  background: white;
+  background: #fff;
   border-radius: 12px;
   padding: 1.5rem;
   width: 90%;
@@ -730,10 +855,16 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 .modal input {
   width: 100%;
   padding: 0.75rem;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #cbd5e1;
   border-radius: 8px;
   font-size: 1rem;
   margin-bottom: 1rem;
+}
+
+.modal input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
 .modal-actions {
@@ -751,7 +882,7 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   font-size: 0.875rem;
   font-weight: 500;
   margin-bottom: 0.5rem;
-  color: #374151;
+  color: #334155;
 }
 
 .share-url {

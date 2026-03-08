@@ -324,25 +324,25 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
 }
 
 .tabs button {
-  background: white;
-  border: 1px solid #e5e7eb;
+  background: #fff;
+  border: 1px solid #e2e8f0;
   padding: 0.625rem 1.25rem;
   border-radius: 8px;
   cursor: pointer;
   font-weight: 500;
-  color: #6b7280;
+  color: #64748b;
 }
 
 .tabs button.active {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: #1e40af;
+  color: #fff;
   border-color: transparent;
 }
 
 .loading {
   text-align: center;
   padding: 4rem;
-  color: #9ca3af;
+  color: #94a3b8;
 }
 
 .stats-grid {
@@ -352,30 +352,30 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
 }
 
 .stat-card {
-  background: white;
+  background: #fff;
   border-radius: 12px;
   padding: 1.5rem;
 }
 
 .stat-card h3 {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: #64748b;
   margin: 0 0 0.5rem;
 }
 
 .stat-value {
   font-size: 2rem;
   font-weight: 700;
-  color: #111827;
+  color: #1e40af;
 }
 
 .stat-label {
   font-size: 0.75rem;
-  color: #9ca3af;
+  color: #94a3b8;
 }
 
 .users-list, .invites-list {
-  background: white;
+  background: #fff;
   border-radius: 12px;
   overflow: hidden;
 }
@@ -385,18 +385,18 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
   align-items: center;
   gap: 1rem;
   padding: 1rem 1.5rem;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .user-avatar {
   width: 40px;
   height: 40px;
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  background: #1e40af;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: #fff;
   font-weight: 600;
 }
 
@@ -415,14 +415,14 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
 .role-badge {
   font-size: 0.7rem;
   background: #dbeafe;
-  color: #1d4ed8;
+  color: #1e40af;
   padding: 0.125rem 0.5rem;
   border-radius: 4px;
 }
 
 .user-email {
   font-size: 0.875rem;
-  color: #9ca3af;
+  color: #94a3b8;
   display: block;
 }
 
@@ -432,20 +432,20 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
 
 .storage-text {
   font-size: 0.75rem;
-  color: #6b7280;
+  color: #64748b;
   margin-bottom: 0.25rem;
 }
 
 .storage-bar {
   height: 4px;
-  background: #e5e7eb;
+  background: #e2e8f0;
   border-radius: 2px;
   overflow: hidden;
 }
 
 .storage-fill {
   height: 100%;
-  background: linear-gradient(90deg, #667eea, #764ba2);
+  background: #3b82f6;
 }
 
 .user-actions {
@@ -458,23 +458,23 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
   font-size: 0.75rem;
   border-radius: 6px;
   cursor: pointer;
-  background: white;
-  border: 1px solid #e5e7eb;
-  color: #374151;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  color: #334155;
 }
 
 .btn-small.btn-warning {
-  color: #d97706;
-  border-color: #d97706;
+  color: #f59e0b;
+  border-color: #fbbf24;
 }
 
 .btn-small.btn-success {
-  color: #10b981;
-  border-color: #10b981;
+  color: #22c55e;
+  border-color: #4ade80;
 }
 
 .invites-section {
-  background: white;
+  background: #fff;
   border-radius: 12px;
   padding: 1.5rem;
 }
@@ -491,7 +491,7 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
   align-items: center;
   gap: 1rem;
   padding: 0.75rem 0;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .invite-item.used, .invite-item.expired {
@@ -501,7 +501,7 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
 .invite-code {
   font-family: monospace;
   font-size: 1rem;
-  background: #f3f4f6;
+  background: #f1f5f9;
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
 }
@@ -509,7 +509,7 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
 .invite-info {
   flex: 1;
   font-size: 0.875rem;
-  color: #6b7280;
+  color: #64748b;
 }
 
 .btn-icon-small {
@@ -517,21 +517,21 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
   border: none;
   padding: 0.375rem;
   cursor: pointer;
-  color: #6b7280;
+  color: #64748b;
   border-radius: 4px;
 }
 
 .btn-icon-small:hover {
-  background: #f3f4f6;
+  background: #f1f5f9;
 }
 
 .btn-icon-small.danger:hover {
-  color: #ef4444;
+  color: #dc2626;
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: #1e40af;
+  color: #fff;
   border: none;
   padding: 0.625rem 1.25rem;
   border-radius: 8px;
@@ -540,9 +540,9 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
 }
 
 .btn-secondary {
-  background: white;
-  color: #374151;
-  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #334155;
+  border: 1px solid #e2e8f0;
   padding: 0.625rem 1.25rem;
   border-radius: 8px;
   cursor: pointer;
@@ -559,7 +559,7 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
 }
 
 .modal {
-  background: white;
+  background: #fff;
   border-radius: 12px;
   padding: 1.5rem;
   width: 90%;
@@ -571,7 +571,7 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
 }
 
 .modal p {
-  color: #6b7280;
+  color: #64748b;
   margin-bottom: 1rem;
 }
 
@@ -589,8 +589,14 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
 .form-group input {
   width: 100%;
   padding: 0.625rem;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #e2e8f0;
   border-radius: 6px;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
 .modal-actions {
@@ -610,7 +616,7 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
 
 .created-codes code {
   font-family: monospace;
-  background: #f3f4f6;
+  background: #f1f5f9;
   padding: 0.5rem;
   border-radius: 4px;
 }

@@ -126,17 +126,17 @@ async function handleRegister() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #0f172a;
   padding: 1rem;
 }
 
 .auth-card {
-  background: white;
+  background: #fff;
   border-radius: 12px;
   padding: 2.5rem;
   width: 100%;
   max-width: 400px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
 }
 
 .auth-title {
@@ -144,7 +144,7 @@ async function handleRegister() {
   font-weight: 700;
   text-align: center;
   margin: 0 0 0.5rem;
-  color: #1a1a2e;
+  color: #1e40af;
 }
 
 .auth-subtitle {
@@ -181,32 +181,32 @@ async function handleRegister() {
 
 .form-group input:focus {
   outline: none;
-  border-color: #667eea;
-  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
 .error-message {
-  background: #fee2e2;
-  color: #dc2626;
+  background: #fef2f2;
+  color: #991b1b;
   padding: 0.75rem 1rem;
   border-radius: 8px;
   font-size: 0.875rem;
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: #1e40af;
+  color: #fff;
   border: none;
   padding: 0.875rem 1.5rem;
   border-radius: 8px;
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.2s, transform 0.2s;
+  transition: background 0.2s, transform 0.2s;
 }
 
 .btn-primary:hover:not(:disabled) {
-  opacity: 0.9;
+  background: #1e3a8a;
   transform: translateY(-1px);
 }
 
@@ -223,7 +223,7 @@ async function handleRegister() {
 }
 
 .auth-footer a {
-  color: #667eea;
+  color: #1e40af;
   text-decoration: none;
   font-weight: 500;
 }
