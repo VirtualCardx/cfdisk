@@ -276,6 +276,184 @@ export async function handleDirectUpload(request: Request, env: Env): Promise<Re
   }
 }
 
+// 分片上传状态存储
+interface ChunkUploadState {
+  fileId: string;
+  r2Key: string;
+  uploadId: string;
+  chunks: { [key: number]: string }; // chunkIndex -> etag (使用普通对象替代 Map 以便序列化)
+  parentId: string | null;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+}
+
+// 使用 R2 存储上传状态，确保在 Cloudflare Workers 多实例间共享
+const UPLOAD_STATE_PREFIX = 'upload-state/';
+
+async function getUploadState(env: Env, stateKey: string): Promise<ChunkUploadState | null> {
+  try {
+    const obj = await env.R2.get(`${UPLOAD_STATE_PREFIX}${stateKey}`);
+    if (!obj) return null;
+    const json = await obj.text();
+    return JSON.parse(json) as ChunkUploadState;
+  } catch {
+    return null;
+  }
+}
+
+async function setUploadState(env: Env, stateKey: string, state: ChunkUploadState): Promise<void> {
+  await env.R2.put(`${UPLOAD_STATE_PREFIX}${stateKey}`, JSON.stringify(state), {
+    httpMetadata: { contentType: 'application/json' },
+  });
+}
+
+async function deleteUploadState(env: Env, stateKey: string): Promise<void> {
+  await env.R2.delete(`${UPLOAD_STATE_PREFIX}${stateKey}`);
+}
+
+export async function handleUploadChunk(request: Request, env: Env): Promise<Response> {
+  const auth = await authenticate(request, env);
+  if (!isAuthContext(auth)) return auth;
+
+  try {
+    const formData = await request.formData();
+    const chunk = formData.get('chunk') as File | null;
+    const chunkIndex = parseInt(formData.get('chunkIndex') as string);
+    const totalChunks = parseInt(formData.get('totalChunks') as string);
+    const fileHash = formData.get('fileHash') as string;
+    const fileName = formData.get('fileName') as string;
+    const parentId = formData.get('parent_id') as string | null;
+
+    if (!chunk || isNaN(chunkIndex) || isNaN(totalChunks) || !fileHash || !fileName) {
+      return errors.badRequest('Missing required fields');
+    }
+
+    if (!isValidFileName(fileName)) {
+      return errors.badRequest('Invalid filename');
+    }
+
+    // 检查存储配额
+    const totalSize = parseInt(formData.get('fileSize') as string) * totalChunks;
+    if (auth.user.storage_used + totalSize > auth.user.storage_quota) {
+      return errors.quotaExceeded();
+    }
+
+    if (parentId) {
+      const parentFolder = await env.DB.prepare(
+        'SELECT id FROM files WHERE id = ? AND user_id = ? AND type = ? AND deleted_at IS NULL'
+      )
+        .bind(parentId, auth.user.id, 'folder')
+        .first();
+
+      if (!parentFolder) {
+        return errors.notFound('Parent folder not found');
+      }
+    }
+
+    const stateKey = `${auth.user.id}:${fileHash}`;
+    let state = await getUploadState(env, stateKey);
+
+    // 初始化上传状态
+    if (!state) {
+      // 使用 UUID 作为文件 ID，确保与分享等功能兼容
+      const fileId = crypto.randomUUID();
+      const r2Key = `${auth.user.id}/${fileId}`;
+      const multipartUpload = await env.R2.createMultipartUpload(r2Key);
+      
+      state = {
+        fileId,
+        r2Key,
+        uploadId: multipartUpload.uploadId,
+        chunks: {},
+        parentId,
+        fileName,
+        fileSize: totalSize,
+        mimeType: getMimeType(fileName),
+      };
+      await setUploadState(env, stateKey, state);
+    }
+
+    // 上传分片到 R2
+    const upload = env.R2.resumeMultipartUpload(state.r2Key, state.uploadId);
+    const part = await upload.uploadPart(chunkIndex + 1, chunk.stream());
+    
+    // 更新状态并保存
+    state.chunks[chunkIndex] = part.etag;
+    await setUploadState(env, stateKey, state);
+
+    // 如果是最后一片，完成上传
+    if (chunkIndex === totalChunks - 1) {
+      // 验证所有分片都已上传
+      const uploadedChunkCount = Object.keys(state.chunks).length;
+      if (uploadedChunkCount !== totalChunks) {
+        return errors.badRequest('Missing chunks');
+      }
+
+      // 按顺序组装 parts
+      const parts = [];
+      for (let i = 0; i < totalChunks; i++) {
+        const etag = state.chunks[i];
+        if (!etag) {
+          return errors.badRequest(`Missing chunk ${i}`);
+        }
+        parts.push({ partNumber: i + 1, etag });
+      }
+
+      // 完成分片上传
+      await upload.complete(parts);
+
+      // 获取上传后的文件信息
+      const obj = await env.R2.head(state.r2Key);
+      if (!obj) {
+        return errors.serverError('Failed to verify uploaded file');
+      }
+
+      const safeName = sanitizeFileName(state.fileName);
+      const now = Date.now();
+
+      // 保存到数据库
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO files (id, user_id, parent_id, name, type, mime_type, size, r2_key, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'file', ?, ?, ?, ?, ?)`
+        ).bind(state.fileId, auth.user.id, state.parentId, safeName, state.mimeType, obj.size, state.r2Key, now, now),
+        env.DB.prepare(
+          'UPDATE users SET storage_used = storage_used + ?, updated_at = ? WHERE id = ?'
+        ).bind(obj.size, now, auth.user.id),
+      ]);
+
+      // 清理状态
+      await deleteUploadState(env, stateKey);
+
+      // 返回完整的文件信息（直接返回，不使用 success 包装，避免嵌套）
+      return Response.json({
+        success: true,
+        file: {
+          id: state.fileId,
+          parent_id: state.parentId,
+          name: safeName,
+          type: 'file',
+          mime_type: state.mimeType,
+          size: obj.size,
+          created_at: now,
+          updated_at: now,
+        },
+      }, { status: 201 });
+    }
+
+    // 返回分片上传成功
+    return Response.json({
+      success: true,
+      chunkIndex,
+      totalChunks,
+    });
+  } catch (e) {
+    console.error('Upload chunk error:', e);
+    return errors.serverError('Failed to upload chunk');
+  }
+}
+
 export async function handleDownload(request: Request, env: Env, fileId?: string): Promise<Response> {
   if (!fileId) return errors.badRequest('Missing file ID');
   const auth = await authenticate(request, env);

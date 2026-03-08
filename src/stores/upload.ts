@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { useFilesStore, type FileItem } from './files';
 import { useAuthStore } from './auth';
+import { uploadFileChunked, shouldUseChunkedUpload } from '@/utils/uploadChunked';
 
 export interface UploadTask {
   id: string;
@@ -70,6 +71,28 @@ export const useUploadStore = defineStore('upload', () => {
     const filesStore = useFilesStore();
     const authStore = useAuthStore();
 
+    // 大文件使用分片上传
+    if (shouldUseChunkedUpload(task.file.size)) {
+      const result = await uploadFileChunked({
+        file: task.file,
+        parentId: task.parentId,
+        onProgress: (progress) => {
+          task.progress = progress;
+        },
+      });
+
+      if (result.success && result.file) {
+        if (task.parentId === filesStore.currentFolderId) {
+          filesStore.files.push(result.file as FileItem);
+        }
+        authStore.updateStorageUsed(task.file.size);
+        return;
+      } else {
+        throw new Error(result.error || 'Upload failed');
+      }
+    }
+
+    // 小文件使用普通上传
     const formData = new FormData();
     formData.append('file', task.file);
     if (task.parentId) {
