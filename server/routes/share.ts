@@ -1,7 +1,13 @@
 import { success, errors } from '../utils/response';
 import { authenticate, isAuthContext } from '../middleware/auth';
 import { hashPassword, verifyPassword } from '../utils/hash';
-import { isValidUUID, generateShareToken, getMimeType } from '../utils/validate';
+import { signJwt, verifyJwt } from '../utils/jwt';
+import { getJwtSecret } from '../utils/env';
+import { contentDisposition } from '../utils/http';
+import { isValidUUID, generateShareToken } from '../utils/validate';
+import { rateLimit, clientIp } from '../utils/ratelimit';
+
+const SHARE_ACCESS_TTL = 3600;
 
 interface ShareRecord {
   id: string;
@@ -14,6 +20,48 @@ interface ShareRecord {
   download_count: number;
   max_downloads: number | null;
   created_at: number;
+}
+
+/**
+ * 密码校验通过后签发访问凭证，绑定到该分享的 access_token。
+ * 下载/预览凭此凭证放行，URL 上的 verified=true 一律不再采信。
+ */
+async function issueShareAccess(env: Env, accessToken: string): Promise<string> {
+  const secret = getJwtSecret(env);
+  if (!secret) throw new Error('JWT secret not configured');
+  return signJwt({ sub: accessToken, role: 'share' }, secret, SHARE_ACCESS_TTL);
+}
+
+/**
+ * 校验分享访问权限。无密码分享直接放行；
+ * 有密码分享必须携带与本次分享匹配的签名凭证。
+ */
+async function checkShareAccess(
+  request: Request,
+  env: Env,
+  share: ShareRecord
+): Promise<Response | null> {
+  if (!share.password_hash) return null;
+
+  const url = new URL(request.url);
+  const candidate =
+    request.headers.get('X-Share-Access') || url.searchParams.get('access');
+
+  if (!candidate) {
+    return errors.sharePasswordRequired();
+  }
+
+  const secret = getJwtSecret(env);
+  if (!secret) {
+    return errors.serverError('JWT secret not configured');
+  }
+
+  const payload = await verifyJwt(candidate, secret);
+  if (!payload || payload.role !== 'share' || payload.sub !== share.access_token) {
+    return errors.sharePasswordRequired();
+  }
+
+  return null;
 }
 
 interface CreateShareBody {
@@ -171,6 +219,7 @@ export async function handleAccessShare(request: Request, env: Env, token?: stri
     }
 
     const needsPassword = !!share.password_hash;
+    const access = needsPassword ? null : await issueShareAccess(env, share.access_token);
 
     return success({
       share: {
@@ -179,6 +228,7 @@ export async function handleAccessShare(request: Request, env: Env, token?: stri
         mime_type: share.mime_type,
         size: share.size,
         needs_password: needsPassword,
+        access,
         expires_at: share.expires_at,
       },
     });
@@ -191,6 +241,10 @@ export async function handleAccessShare(request: Request, env: Env, token?: stri
 export async function handleVerifySharePassword(request: Request, env: Env, token?: string): Promise<Response> {
   if (!token) return errors.badRequest('Missing token');
   try {
+    // 同一 IP 针对同一分享 10 分钟最多 10 次
+    const limit = await rateLimit(env, `share-verify:${clientIp(request)}:${token}`, 10, 600);
+    if (!limit.allowed) return errors.rateLimited(limit.retryAfter);
+
     const body = await request.json<{ password: string }>();
     const { password } = body;
 
@@ -199,25 +253,26 @@ export async function handleVerifySharePassword(request: Request, env: Env, toke
     }
 
     const share = await env.DB.prepare(
-      'SELECT password_hash FROM shares WHERE access_token = ?'
+      'SELECT access_token, password_hash FROM shares WHERE access_token = ?'
     )
       .bind(token)
-      .first<{ password_hash: string | null }>();
+      .first<{ access_token: string; password_hash: string | null }>();
 
     if (!share) {
       return errors.notFound('Share not found');
     }
 
-    if (!share.password_hash) {
-      return success({ verified: true });
+    if (share.password_hash) {
+      const valid = await verifyPassword(password, share.password_hash);
+      if (!valid) {
+        return errors.sharePasswordIncorrect();
+      }
     }
 
-    const valid = await verifyPassword(password, share.password_hash);
-    if (!valid) {
-      return errors.badRequest('Incorrect password');
-    }
-
-    return success({ verified: true });
+    return success({
+      verified: true,
+      access: await issueShareAccess(env, share.access_token),
+    });
   } catch (e) {
     console.error('Verify share password error:', e);
     return errors.serverError('Failed to verify password');
@@ -276,12 +331,8 @@ export async function handleShareDownload(request: Request, env: Env, token?: st
       }
     }
 
-    const url = new URL(request.url);
-    const passwordVerified = url.searchParams.get('verified');
-
-    if (share.password_hash && passwordVerified !== 'true') {
-      return errors.sharePasswordRequired();
-    }
+    const accessError = await checkShareAccess(request, env, share);
+    if (accessError) return accessError;
 
     const obj = await env.R2.get(share.r2_key);
     if (!obj) {
@@ -296,7 +347,7 @@ export async function handleShareDownload(request: Request, env: Env, token?: st
 
     const headers = new Headers();
     headers.set('Content-Type', share.mime_type || 'application/octet-stream');
-    headers.set('Content-Disposition', `attachment; filename="${encodeURIComponent(share.file_name)}"`);
+    headers.set('Content-Disposition', contentDisposition(share.file_name, 'attachment'));
     headers.set('Content-Length', String(obj.size));
 
     return new Response(obj.body, { headers });
@@ -350,12 +401,8 @@ export async function handleSharePreview(request: Request, env: Env, token?: str
       }
     }
 
-    const url = new URL(request.url);
-    const passwordVerified = url.searchParams.get('verified');
-
-    if (share.password_hash && passwordVerified !== 'true') {
-      return errors.sharePasswordRequired();
-    }
+    const accessError = await checkShareAccess(request, env, share);
+    if (accessError) return accessError;
 
     const obj = await env.R2.get(share.r2_key);
     if (!obj) {

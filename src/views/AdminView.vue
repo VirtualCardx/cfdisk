@@ -620,4 +620,50 @@ const unusedCodes = computed(() => inviteCodes.value.filter((c) => !c.is_used &&
   padding: 0.5rem;
   border-radius: 4px;
 }
+
+@media (max-width: 768px) {
+  .admin-view {
+    padding: 1rem;
+  }
+
+  .tabs {
+    flex-wrap: wrap;
+  }
+
+  .user-item {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .user-storage {
+    width: 100%;
+    order: 3;
+  }
+
+  .user-actions {
+    width: 100%;
+    justify-content: flex-end;
+    order: 2;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .invite-item {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .invite-info {
+    width: 100%;
+    order: 3;
+  }
+}
 </style>

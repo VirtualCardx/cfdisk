@@ -8,6 +8,8 @@
 	"compatibility_date": "2026-03-01",
 	"main": "server/index.ts",
 	"assets": {
+		// 显式声明绑定，Worker 才能在静态资源未命中时取回 index.html
+		"binding": "ASSETS",
 		"not_found_handling": "single-page-application"
 	},
 	"observability": {
@@ -26,7 +28,8 @@
 		{
 			"binding": "DB",
 			"database_name": "cfdisk-db",
-			"database_id": "378d34f2-d914-44a3-9366-b190847dbc38"
+			"database_id": "378d34f2-d914-44a3-9366-b190847dbc38",
+			"migrations_dir": "migrations"
 		}
 	]
 }

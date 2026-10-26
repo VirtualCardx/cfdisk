@@ -1,17 +1,35 @@
 /**
  * 分片上传工具
- * 将大文件分割成小块上传，避免 HTTP/2 超时问题
+ *
+ * 顺序很关键：服务端约定「首片建会话、末片合并」，所以这里先单独发第 0 片，
+ * 中间分片按 3 路并发上传，最后单独发第 n-1 片触发合并并拿到文件对象。
+ * 每个上传会话带独立 sessionId，同名同大小文件并发上传不会互相污染状态。
  */
 
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB 每片
+const CHUNK_CONCURRENCY = 3; // 中间分片并发数
 const MAX_RETRIES = 3; // 每片最大重试次数
 const RETRY_DELAY = 1000; // 重试间隔（毫秒）
+
+interface ChunkResult {
+  success: boolean;
+  file?: {
+    id: string;
+    name: string;
+    type: string;
+    mime_type: string;
+    size: number;
+    created_at: number;
+    updated_at: number;
+  };
+  error?: string;
+}
 
 export interface ChunkedUploadOptions {
   file: File;
   parentId: string | null;
   onProgress: (progress: number) => void;
-  onChunkComplete?: (chunkIndex: number, totalChunks: number) => void;
+  onChunkComplete?: (completedChunks: number, totalChunks: number) => void;
 }
 
 export interface ChunkedUploadResult {
@@ -30,41 +48,26 @@ export interface ChunkedUploadResult {
 }
 
 /**
- * 生成文件唯一标识
- */
-function generateFileHash(file: File): Promise<string> {
-  return new Promise((resolve) => {
-    // 使用文件名+大小+修改时间作为简单标识
-    const str = `${file.name}-${file.size}-${file.lastModified}`;
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    resolve(Math.abs(hash).toString(16));
-  });
-}
-
-/**
  * 上传单个分片
  */
 async function uploadChunk(
   chunk: Blob,
   chunkIndex: number,
   totalChunks: number,
-  fileHash: string,
   fileName: string,
+  fileSize: number,
   parentId: string | null,
+  sessionId: string,
   token: string | null
-): Promise<{ success: boolean; file?: { id: string; name: string; type: string; mime_type: string; size: number; created_at: number; updated_at: number }; error?: string }> {
+): Promise<ChunkResult> {
   const formData = new FormData();
   formData.append('chunk', chunk);
   formData.append('chunkIndex', chunkIndex.toString());
   formData.append('totalChunks', totalChunks.toString());
-  formData.append('fileHash', fileHash);
+  formData.append('sessionId', sessionId);
   formData.append('fileName', fileName);
-  formData.append('fileSize', chunk.size.toString());
+  // 整个文件的总大小，不是单片大小
+  formData.append('fileSize', fileSize.toString());
   if (parentId) {
     formData.append('parent_id', parentId);
   }
@@ -100,48 +103,74 @@ async function uploadChunkWithRetry(
   chunk: Blob,
   chunkIndex: number,
   totalChunks: number,
-  fileHash: string,
   fileName: string,
+  fileSize: number,
   parentId: string | null,
+  sessionId: string,
   token: string | null
-): Promise<{ success: boolean; file?: { id: string; name: string; type: string; mime_type: string; size: number; created_at: number; updated_at: number }; error?: string }> {
+): Promise<ChunkResult> {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       const result = await uploadChunk(
         chunk,
         chunkIndex,
         totalChunks,
-        fileHash,
         fileName,
+        fileSize,
         parentId,
+        sessionId,
         token
       );
-      
+
       if (result.success) {
         return result;
       }
-      
+
       // 如果是最后一片且合并失败，直接返回错误
       if (chunkIndex === totalChunks - 1) {
         return result;
       }
-      
-      // 其他情况重试
+
       if (attempt < MAX_RETRIES) {
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempt));
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY * attempt));
       }
     } catch (error) {
       if (attempt === MAX_RETRIES) {
-        return { 
-          success: false, 
-          error: error instanceof Error ? error.message : 'Upload failed' 
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Upload failed',
         };
       }
-      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * attempt));
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY * attempt));
     }
   }
-  
+
   return { success: false, error: 'Max retries exceeded' };
+}
+
+/** 固定并发度的任务池，任一任务失败后停止领取新任务 */
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  let cursor = 0;
+  let failure: unknown = null;
+
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length && !failure) {
+      const item = items[cursor] as T;
+      cursor++;
+      try {
+        await worker(item);
+      } catch (error) {
+        failure = error;
+      }
+    }
+  });
+
+  await Promise.all(runners);
+  if (failure) throw failure;
 }
 
 /**
@@ -151,67 +180,75 @@ export async function uploadFileChunked(
   options: ChunkedUploadOptions
 ): Promise<ChunkedUploadResult> {
   const { file, parentId, onProgress, onChunkComplete } = options;
-  
+
   // 小文件直接返回，使用普通上传
   if (file.size <= CHUNK_SIZE) {
     return { success: false, error: 'Use regular upload for small files' };
   }
 
   const token = localStorage.getItem('token');
-  const fileHash = await generateFileHash(file);
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-  
-  let uploadedChunks = 0;
+  const sessionId = crypto.randomUUID();
 
-  try {
-    let lastResult: { success: boolean; file?: { id: string; name: string; type: string; mime_type: string; size: number; created_at: number; updated_at: number }; error?: string } | null = null;
-    
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunk = file.slice(start, end);
+  let completedChunks = 0;
 
-      const result = await uploadChunkWithRetry(
-        chunk,
-        i,
-        totalChunks,
-        fileHash,
-        file.name,
-        parentId,
-        token
-      );
+  const uploadAt = async (index: number): Promise<ChunkResult> => {
+    const start = index * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, file.size);
+    const chunk = file.slice(start, end);
 
-      if (!result.success) {
-        return { success: false, error: result.error || `Chunk ${i + 1} failed` };
-      }
+    const result = await uploadChunkWithRetry(
+      chunk,
+      index,
+      totalChunks,
+      file.name,
+      file.size,
+      parentId,
+      sessionId,
+      token
+    );
 
-      lastResult = result;
-      uploadedChunks++;
-      const progress = Math.round((uploadedChunks / totalChunks) * 100);
-      onProgress(progress);
-      
-      if (onChunkComplete) {
-        onChunkComplete(i + 1, totalChunks);
-      }
+    if (!result.success) {
+      throw new Error(result.error || `Chunk ${index + 1} failed`);
     }
 
-    // 所有分片上传完成，返回服务器返回的文件信息
-    // 最后一片上传会返回完整的文件对象
-    if (lastResult?.file) {
-      return { 
+    completedChunks++;
+    onProgress(Math.round((completedChunks / totalChunks) * 100));
+    onChunkComplete?.(completedChunks, totalChunks);
+
+    return result;
+  };
+
+  try {
+    // 首片单独发：服务端在这里创建 multipart 会话
+    await uploadAt(0);
+
+    // 中间分片并发上传
+    const middleIndexes: number[] = [];
+    for (let i = 1; i < totalChunks - 1; i++) {
+      middleIndexes.push(i);
+    }
+    await runWithConcurrency(middleIndexes, CHUNK_CONCURRENCY, async (index) => {
+      await uploadAt(index);
+    });
+
+    // 末片单独发：服务端校验分片齐全后合并，并返回文件对象
+    const lastResult = await uploadAt(totalChunks - 1);
+    if (lastResult.file) {
+      return {
         success: true,
         file: {
           ...lastResult.file,
-          parent_id: parentId
-        }
+          parent_id: parentId,
+        },
       };
     }
-    
+
     return { success: false, error: 'No file data returned from server' };
   } catch (error) {
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Upload failed' 
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Upload failed',
     };
   }
 }

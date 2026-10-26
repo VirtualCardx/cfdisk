@@ -1,12 +1,25 @@
 export interface JwtPayload {
   sub: string;
   role: string;
+  /** 预览凭证绑定的文件 ID */
+  fid?: string;
+  /** 用户 token 版本号，与 users.token_version 不符即视为已吊销 */
+  tv?: number;
   jti: string;
   iat: number;
   exp: number;
 }
 
 const encoder = new TextEncoder();
+
+/**
+ * 登录态有效期：30 天。
+ *
+ * 配合前端的滑动续期（token 剩余不足 7 天时静默换新），
+ * 只要用户不是连续一个月不打开，登录态就不会掉。
+ * 改密码会抬高 token_version，此前签发的 token 立刻全部作废。
+ */
+export const TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 async function getKey(secret: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
@@ -41,7 +54,7 @@ function base64UrlDecode(str: string): Uint8Array {
 export async function signJwt(
   payload: Omit<JwtPayload, 'iat' | 'exp' | 'jti'>,
   secret: string,
-  expiresInSeconds = 7200
+  expiresInSeconds = TOKEN_TTL_SECONDS
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const fullPayload: JwtPayload = {

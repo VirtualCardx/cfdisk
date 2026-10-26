@@ -143,7 +143,11 @@ function formatDate(timestamp: number): string {
         <div v-if="showDeleteModal" class="modal-overlay" @click="showDeleteModal = false">
           <div class="modal" @click.stop>
             <h3>Delete Forever?</h3>
-            <p>This will permanently delete "{{ selectedItem?.name }}". This action cannot be undone.</p>
+            <p>
+              This will permanently delete "{{ selectedItem?.name }}"
+              <template v-if="selectedItem?.type === 'folder'"> and everything inside it</template>.
+              This action cannot be undone.
+            </p>
             <div class="modal-actions">
               <button class="btn-secondary" @click="showDeleteModal = false">Cancel</button>
               <button class="btn-danger" @click="permanentDelete">Delete Forever</button>
@@ -306,5 +310,22 @@ function formatDate(timestamp: number): string {
   display: flex;
   gap: 0.75rem;
   justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+  .trash-view {
+    padding: 1rem;
+  }
+
+  .trash-item {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .item-actions {
+    width: 100%;
+    justify-content: flex-end;
+    margin-top: 0.5rem;
+  }
 }
 </style>

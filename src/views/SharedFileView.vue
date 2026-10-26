@@ -9,6 +9,7 @@ interface ShareInfo {
   mime_type: string;
   size: number;
   needs_password: boolean;
+  access: string | null;
   expires_at: number | null;
 }
 
@@ -23,6 +24,7 @@ const passwordVerified = ref(false);
 const passwordError = ref('');
 const downloadProgress = ref(0);
 const isDownloading = ref(false);
+const accessToken = ref('');
 
 onMounted(() => {
   loadShareInfo();
@@ -35,6 +37,7 @@ async function loadShareInfo() {
     const data = await api.get<{ share: ShareInfo }>(`/s/${token.value}`, { skipAuth: true });
     shareInfo.value = data.share;
     if (!data.share.needs_password) {
+      accessToken.value = data.share.access || '';
       passwordVerified.value = true;
     }
   } catch (e: unknown) {
@@ -47,7 +50,12 @@ async function loadShareInfo() {
 async function verifyPassword() {
   passwordError.value = '';
   try {
-    await api.post(`/s/${token.value}/verify`, { password: password.value }, { skipAuth: true });
+    const data = await api.post<{ verified: boolean; access: string }>(
+      `/s/${token.value}/verify`,
+      { password: password.value },
+      { skipAuth: true }
+    );
+    accessToken.value = data.access;
     passwordVerified.value = true;
   } catch (e: unknown) {
     passwordError.value = e instanceof Error ? e.message : 'Incorrect password';
@@ -76,12 +84,12 @@ function isAudio(mimeType: string): boolean {
 
 function getPreviewUrl(): string {
   const base = `/api/s/${token.value}/preview`;
-  return passwordVerified.value ? `${base}?verified=true` : base;
+  return accessToken.value ? `${base}?access=${encodeURIComponent(accessToken.value)}` : base;
 }
 
 function getDownloadUrl(): string {
   const base = `/api/s/${token.value}/download`;
-  return passwordVerified.value ? `${base}?verified=true` : base;
+  return accessToken.value ? `${base}?access=${encodeURIComponent(accessToken.value)}` : base;
 }
 
 async function download() {

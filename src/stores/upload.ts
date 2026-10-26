@@ -3,6 +3,7 @@ import { ref, computed } from 'vue';
 import { useFilesStore, type FileItem } from './files';
 import { useAuthStore } from './auth';
 import { uploadFileChunked, shouldUseChunkedUpload } from '@/utils/uploadChunked';
+import { createThumbnail, isThumbnailableImage, uploadThumbnail } from '@/utils/thumbnail';
 
 export interface UploadTask {
   id: string;
@@ -17,6 +18,13 @@ export const useUploadStore = defineStore('upload', () => {
   const queue = ref<UploadTask[]>([]);
   const isUploading = ref(false);
 
+  /**
+   * 缩略图作业状态，供 FileThumb 判断「这张图是刚传的，别去下载原图回填」。
+   * 上传时原图就在内存里，直接生成缩略图即可；只有历史文件才需要下载原图补生成。
+   */
+  const pendingThumbs = ref<Set<string>>(new Set());
+  const thumbAttempted = ref<Set<string>>(new Set());
+
   const totalProgress = computed(() => {
     if (queue.value.length === 0) return 0;
     const total = queue.value.reduce((sum, task) => sum + task.progress, 0);
@@ -26,6 +34,51 @@ export const useUploadStore = defineStore('upload', () => {
   const activeUploads = computed(() => queue.value.filter((t) => t.status === 'uploading').length);
 
   const pendingUploads = computed(() => queue.value.filter((t) => t.status === 'pending').length);
+
+  /**
+   * 批量上传的文件数目统计，供进度面板显示「总共 / 已上传 / 剩余」。
+   *
+   * remaining 只算「还没处理完的」（排队 + 正在传），失败项单独计数，
+   * 这样 total = completed + remaining + failed 恒等，用户不会看到
+   * 「12 个文件，5 个完成，7 个剩余，1 个失败」这种加起来超额的显示。
+   *
+   * percent 把失败项也按「已处理」计入：否则某个文件传到 40% 失败后，
+   * 整体进度会永远停在 9x%，看起来像卡死。失败信息由 failed 数字表达。
+   */
+  const stats = computed(() => {
+    let completed = 0;
+    let failed = 0;
+    let uploading = 0;
+    let pending = 0;
+    let processed = 0;
+
+    for (const task of queue.value) {
+      if (task.status === 'completed') {
+        completed += 1;
+        processed += 100;
+      } else if (task.status === 'error') {
+        failed += 1;
+        processed += 100;
+      } else {
+        if (task.status === 'uploading') uploading += 1;
+        else pending += 1;
+        processed += task.progress;
+      }
+    }
+
+    const total = queue.value.length;
+    return {
+      total,
+      completed,
+      failed,
+      uploading,
+      pending,
+      remaining: uploading + pending,
+      percent: total === 0 ? 0 : Math.round(processed / total),
+    };
+  });
+
+  const isBatch = computed(() => queue.value.length > 1);
 
   function addToQueue(files: FileList | File[], parentId: string | null): void {
     const newTasks: UploadTask[] = Array.from(files).map((file) => ({
@@ -86,6 +139,7 @@ export const useUploadStore = defineStore('upload', () => {
           filesStore.files.push(result.file as FileItem);
         }
         authStore.updateStorageUsed(task.file.size);
+        void attachThumbnail(task.file, result.file.id);
         return;
       } else {
         throw new Error(result.error || 'Upload failed');
@@ -117,6 +171,7 @@ export const useUploadStore = defineStore('upload', () => {
                 filesStore.files.push(response.data.file as FileItem);
               }
               authStore.updateStorageUsed(task.file.size);
+              void attachThumbnail(task.file, response.data.file.id);
             }
             resolve();
           } catch {
@@ -145,6 +200,33 @@ export const useUploadStore = defineStore('upload', () => {
     });
   }
 
+  /**
+   * 上传成功后立即用内存里的原图生成缩略图并回传。
+   *
+   * 这条路径不需要再下载原图（字节本来就在手上），因此新上传的图片
+   * 无论多大都能有缩略图；失败也不影响上传结果，只是列表里退回图标。
+   */
+  async function attachThumbnail(file: File, fileId: string): Promise<void> {
+    if (!isThumbnailableImage(file.type)) return;
+
+    const filesStore = useFilesStore();
+
+    pendingThumbs.value.add(fileId);
+    thumbAttempted.value.add(fileId);
+
+    try {
+      const thumb = await createThumbnail(file);
+      if (!thumb) return;
+
+      const url = await uploadThumbnail(fileId, thumb);
+      if (url) filesStore.setThumbUrl(fileId, url);
+    } catch {
+      /* 缩略图是锦上添花，任何异常都吞掉 */
+    } finally {
+      pendingThumbs.value.delete(fileId);
+    }
+  }
+
   function removeTask(taskId: string): void {
     queue.value = queue.value.filter((t) => t.id !== taskId);
   }
@@ -166,9 +248,13 @@ export const useUploadStore = defineStore('upload', () => {
   return {
     queue,
     isUploading,
+    pendingThumbs,
+    thumbAttempted,
     totalProgress,
     activeUploads,
     pendingUploads,
+    stats,
+    isBatch,
     addToQueue,
     processQueue,
     removeTask,

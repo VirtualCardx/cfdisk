@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 
@@ -10,6 +10,18 @@ const authStore = useAuthStore();
 const username = ref('');
 const password = ref('');
 const error = ref('');
+
+// 被踢回登录页时说明原因，避免用户以为是自己点错了
+const notice = computed(() => {
+  const reason = route.query.reason;
+  if (reason === 'revoked') {
+    return '登录状态已失效（密码或权限发生变更），请重新登录';
+  }
+  if (reason === 'expired') {
+    return '登录状态已过期（太长时间未使用），请重新登录';
+  }
+  return '';
+});
 
 async function handleLogin() {
   error.value = '';
@@ -28,6 +40,15 @@ async function handleLogin() {
     <div class="auth-card">
       <h1 class="auth-title">CFDisk</h1>
       <p class="auth-subtitle">Sign in to your account</p>
+
+      <div v-if="notice" class="session-notice">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M12 8v5"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span>{{ notice }}</span>
+      </div>
 
       <form @submit.prevent="handleLogin" class="auth-form">
         <div class="form-group">
@@ -168,6 +189,24 @@ async function handleLogin() {
   outline: none;
   border-color: #3b82f6;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.session-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #eff6ff;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin-bottom: 1.25rem;
+}
+
+.session-notice svg {
+  flex-shrink: 0;
 }
 
 .error-message {

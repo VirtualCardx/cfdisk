@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { useUIStore } from '@/stores/ui';
 import AppSidebar from './AppSidebar.vue';
+import PreviewModal from '@/components/preview/PreviewModal.vue';
+import ChangePasswordModal from '@/components/settings/ChangePasswordModal.vue';
 
 const uiStore = useUIStore();
 </script>
@@ -11,6 +13,9 @@ const uiStore = useUIStore();
     <main class="main-content" :class="{ expanded: !uiStore.sidebarOpen }">
       <slot />
     </main>
+
+    <PreviewModal />
+    <ChangePasswordModal />
 
     <Teleport to="body">
       <div v-if="uiStore.toast" class="toast" :class="uiStore.toast.type">
@@ -36,6 +41,18 @@ const uiStore = useUIStore();
   margin-left: 60px;
 }
 
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .main-content {
+    margin-left: 0;
+    padding-bottom: 70px; /* 为底部导航栏留出空间 */
+  }
+
+  .main-content.expanded {
+    margin-left: 0;
+  }
+}
+
 .toast {
   position: fixed;
   bottom: 2rem;
@@ -46,6 +63,16 @@ const uiStore = useUIStore();
   font-weight: 500;
   z-index: 1000;
   animation: slideUp 0.3s ease;
+  max-width: 90vw;
+  word-break: break-word;
+}
+
+@media (max-width: 768px) {
+  .toast {
+    bottom: 5rem; /* 在底部导航栏上方显示 */
+    font-size: 0.875rem;
+    padding: 0.75rem 1rem;
+  }
 }
 
 .toast.success {

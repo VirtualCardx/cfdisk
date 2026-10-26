@@ -1,6 +1,7 @@
 import { hashPassword } from '../utils/hash';
 import { success, errors } from '../utils/response';
 import { isValidEmail, isValidUsername, isValidPassword, generateInviteCode } from '../utils/validate';
+import { rateLimit, clientIp } from '../utils/ratelimit';
 
 interface InitBody {
   username: string;
@@ -10,6 +11,9 @@ interface InitBody {
 
 export async function handleInit(request: Request, env: Env): Promise<Response> {
   try {
+    const limit = await rateLimit(env, `init:${clientIp(request)}`, 5, 3600);
+    if (!limit.allowed) return errors.rateLimited(limit.retryAfter);
+
     // Check if any admin exists
     const existingAdmin = await env.DB.prepare(
       "SELECT id FROM users WHERE role = 'admin' LIMIT 1"

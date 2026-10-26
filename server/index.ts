@@ -1,9 +1,7 @@
 import { errors } from './utils/response';
-import { handleRegister, handleLogin, handleLogout, handleGetMe, handleChangePassword } from './routes/auth';
+import { handleRegister, handleLogin, handleLogout, handleGetMe, handleRefresh, handleChangePassword } from './routes/auth';
 import {
   handleListFiles,
-  handleGetUploadUrl,
-  handleConfirmUpload,
   handleDirectUpload,
   handleUploadChunk,
   handleDownload,
@@ -13,8 +11,11 @@ import {
   handleGetContent,
   handleSaveContent,
   handlePreview,
+  handleGetPreviewToken,
+  handleSearchFiles,
 } from './routes/files';
 import { handleCreateFolder, handleRenameFolder, handleDeleteFolder, handleGetFolder } from './routes/folders';
+import { handleGetThumb, handleUploadThumb } from './routes/thumb';
 import { handleListTrash, handleRestoreFile, handlePermanentDelete, handleEmptyTrash } from './routes/trash';
 import {
   handleCreateShare,
@@ -56,17 +57,20 @@ const routes: Route[] = [
   { method: 'POST', pattern: /^\/api\/auth\/login$/, handler: handleLogin },
   { method: 'POST', pattern: /^\/api\/auth\/logout$/, handler: handleLogout },
   { method: 'GET', pattern: /^\/api\/auth\/me$/, handler: handleGetMe },
+  { method: 'POST', pattern: /^\/api\/auth\/refresh$/, handler: handleRefresh },
   { method: 'PUT', pattern: /^\/api\/auth\/password$/, handler: handleChangePassword },
 
   // File routes
   { method: 'GET', pattern: /^\/api\/files$/, handler: handleListFiles },
-  { method: 'POST', pattern: /^\/api\/files\/upload-url$/, handler: handleGetUploadUrl },
-  { method: 'POST', pattern: /^\/api\/files\/confirm$/, handler: handleConfirmUpload },
+  { method: 'GET', pattern: /^\/api\/files\/search$/, handler: handleSearchFiles },
   { method: 'POST', pattern: /^\/api\/files\/upload$/, handler: handleDirectUpload },
   { method: 'POST', pattern: /^\/api\/files\/upload-chunk$/, handler: handleUploadChunk },
   { method: 'PUT', pattern: /^\/api\/files\/move$/, handler: handleMove },
   { method: 'GET', pattern: /^\/api\/files\/([^/]+)\/download$/, handler: handleDownload, paramIndex: 1 },
   { method: 'GET', pattern: /^\/api\/files\/([^/]+)\/preview$/, handler: handlePreview, paramIndex: 1 },
+  { method: 'GET', pattern: /^\/api\/files\/([^/]+)\/preview-token$/, handler: handleGetPreviewToken, paramIndex: 1 },
+  { method: 'GET', pattern: /^\/api\/files\/([^/]+)\/thumb$/, handler: handleGetThumb, paramIndex: 1 },
+  { method: 'PUT', pattern: /^\/api\/files\/([^/]+)\/thumb$/, handler: handleUploadThumb, paramIndex: 1 },
   { method: 'GET', pattern: /^\/api\/files\/([^/]+)\/content$/, handler: handleGetContent, paramIndex: 1 },
   { method: 'PUT', pattern: /^\/api\/files\/([^/]+)\/content$/, handler: handleSaveContent, paramIndex: 1 },
   { method: 'PUT', pattern: /^\/api\/files\/([^/]+)\/rename$/, handler: handleRename, paramIndex: 1 },
@@ -106,15 +110,35 @@ const routes: Route[] = [
   { method: 'GET', pattern: /^\/api\/admin\/stats$/, handler: handleGetStats },
 ];
 
-function addCorsHeaders(response: Response, request: Request): Response {
+/**
+ * CORS 只对白名单来源开放。
+ * 默认同源放行（前端与 API 由同一个 Worker 提供，本来就不需要 CORS 头），
+ * 跨域来源必须显式写进 ALLOWED_ORIGINS（逗号分隔）。
+ */
+function isAllowedOrigin(origin: string, request: Request, env: Env): boolean {
+  if (origin === new URL(request.url).origin) return true;
+
+  const configured = (env as unknown as { ALLOWED_ORIGINS?: string }).ALLOWED_ORIGINS;
+  if (!configured) return false;
+
+  return configured
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .includes(origin);
+}
+
+function addCorsHeaders(response: Response, request: Request, env: Env): Response {
   const origin = request.headers.get('Origin');
-  const headers = new Headers(response.headers);
-  
-  if (origin) {
-    headers.set('Access-Control-Allow-Origin', origin);
-    headers.set('Access-Control-Allow-Credentials', 'true');
+  if (!origin || !isAllowedOrigin(origin, request, env)) {
+    return response;
   }
-  
+
+  const headers = new Headers(response.headers);
+  headers.set('Access-Control-Allow-Origin', origin);
+  headers.set('Access-Control-Allow-Credentials', 'true');
+  headers.set('Vary', 'Origin');
+
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -122,18 +146,19 @@ function addCorsHeaders(response: Response, request: Request): Response {
   });
 }
 
-function handleOptions(request: Request): Response {
+function handleOptions(request: Request, env: Env): Response {
   const headers = new Headers();
+  headers.set('Vary', 'Origin');
+
   const origin = request.headers.get('Origin');
-  
-  if (origin) {
+  if (origin && isAllowedOrigin(origin, request, env)) {
     headers.set('Access-Control-Allow-Origin', origin);
     headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     headers.set('Access-Control-Allow-Credentials', 'true');
     headers.set('Access-Control-Max-Age', '86400');
   }
-  
+
   return new Response(null, { status: 204, headers });
 }
 
@@ -145,11 +170,25 @@ export default {
 
     // Handle CORS preflight
     if (method === 'OPTIONS') {
-      return handleOptions(request);
+      return handleOptions(request, env);
     }
 
     // Only handle /api/* routes
     if (!path.startsWith('/api/')) {
+      // 静态资源由 Cloudflare Assets 优先处理，正常情况下请求不会走到这里。
+      // 兜底用于「直接刷新前端路由」：/drive、/login 这类路径在 assets 里没有对应文件，
+      // 需要返回 index.html 交给前端路由，否则刷新就是 404。
+      const assets = (env as unknown as { ASSETS?: { fetch: (req: Request) => Promise<Response> } })
+        .ASSETS;
+      if (
+        assets &&
+        method === 'GET' &&
+        (request.headers.get('Accept') || '').includes('text/html')
+      ) {
+        const indexUrl = new URL('/', url);
+        return assets.fetch(new Request(indexUrl.toString(), request));
+      }
+
       return new Response(null, { status: 404 });
     }
 
@@ -163,13 +202,13 @@ export default {
       try {
         const param = route.paramIndex !== undefined ? match[route.paramIndex] : undefined;
         const response = await route.handler(request, env, param);
-        return addCorsHeaders(response, request);
+        return addCorsHeaders(response, request, env);
       } catch (e) {
         console.error('Route handler error:', e);
-        return addCorsHeaders(errors.serverError('Internal server error'), request);
+        return addCorsHeaders(errors.serverError('Internal server error'), request, env);
       }
     }
 
-    return addCorsHeaders(errors.notFound('API endpoint not found'), request);
+    return addCorsHeaders(errors.notFound('API endpoint not found'), request, env);
   },
 } satisfies ExportedHandler<Env>;

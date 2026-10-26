@@ -44,3 +44,7 @@ __screenshots__/
 !.dev.vars.example
 .env*
 !.env.example
+
+# WorkBuddy 工作区元数据
+.workbuddy/
+.playwright-cli/

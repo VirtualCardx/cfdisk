@@ -1,6 +1,7 @@
 import { success, errors } from '../utils/response';
 import { authenticate, isAuthContext } from '../middleware/auth';
 import { isValidFileName, isValidUUID, sanitizeFileName } from '../utils/validate';
+import { softDeleteTree } from '../utils/trash';
 
 export async function handleCreateFolder(request: Request, env: Env): Promise<Response> {
   const auth = await authenticate(request, env);
@@ -145,46 +146,13 @@ export async function handleDeleteFolder(request: Request, env: Env, folderId?: 
     }
 
     const now = Date.now();
-    await deleteFolderRecursive(env, auth.user.id, folderId, now, folder.parent_id);
+    const batchId = crypto.randomUUID();
+    await softDeleteTree(env, auth.user.id, folderId, now, batchId);
 
-    return success({ message: 'Folder moved to trash' });
+    return success({ message: 'Folder moved to trash', batch_id: batchId });
   } catch (e) {
     console.error('Delete folder error:', e);
     return errors.serverError('Failed to delete folder');
-  }
-}
-
-async function deleteFolderRecursive(
-  env: Env,
-  userId: string,
-  folderId: string,
-  deletedAt: number,
-  originalParentId: string | null
-): Promise<void> {
-  await env.DB.prepare(
-    'UPDATE files SET deleted_at = ?, original_parent_id = ?, updated_at = ? WHERE id = ? AND user_id = ?'
-  )
-    .bind(deletedAt, originalParentId, deletedAt, folderId, userId)
-    .run();
-
-  const { results: children } = await env.DB.prepare(
-    'SELECT id, type, parent_id FROM files WHERE parent_id = ? AND user_id = ? AND deleted_at IS NULL'
-  )
-    .bind(folderId, userId)
-    .all<{ id: string; type: string; parent_id: string }>();
-
-  if (children) {
-    for (const child of children) {
-      if (child.type === 'folder') {
-        await deleteFolderRecursive(env, userId, child.id, deletedAt, child.parent_id);
-      } else {
-        await env.DB.prepare(
-          'UPDATE files SET deleted_at = ?, original_parent_id = parent_id, updated_at = ? WHERE id = ?'
-        )
-          .bind(deletedAt, deletedAt, child.id)
-          .run();
-      }
-    }
   }
 }
 

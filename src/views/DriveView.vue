@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue';
+import { ref, reactive, computed, watch, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AppLayout from '@/components/layout/AppLayout.vue';
-import { useFilesStore, type FileItem } from '@/stores/files';
-import { useUploadStore } from '@/stores/upload';
+import FileThumb from '@/components/files/FileThumb.vue';
+import { useFilesStore, type FileItem, type PathItem } from '@/stores/files';
+import { useUploadStore, type UploadTask } from '@/stores/upload';
 import { useUIStore } from '@/stores/ui';
 import { api } from '@/api/client';
+import { downloadWithProgress } from '@/utils/download';
 
 const route = useRoute();
 const router = useRouter();
@@ -27,6 +29,30 @@ const sharePassword = ref('');
 const shareExpiry = ref('');
 const shareReferers = ref('');
 const createdShareUrl = ref('');
+
+// 批量操作
+const showMoveModal = ref(false);
+const showBatchDeleteModal = ref(false);
+const batchBusy = ref(false);
+const moveTargetId = ref<string | null>(null);
+const moveFolders = ref<FileItem[]>([]);
+const movePath = ref<PathItem[]>([]);
+const moveLoading = ref(false);
+
+// 搜索
+interface SearchResult extends FileItem {
+  path: string[];
+}
+const searchQuery = ref('');
+const searchResults = ref<SearchResult[]>([]);
+const searching = ref(false);
+const searchInputRef = ref<HTMLInputElement | null>(null);
+let searchTimer: number | undefined;
+
+const moveTargetName = computed(() => {
+  if (!moveTargetId.value) return 'My Files';
+  return movePath.value.find((node) => node.id === moveTargetId.value)?.name ?? 'Selected folder';
+});
 
 onMounted(() => {
   loadFiles();
@@ -84,6 +110,29 @@ function formatDate(timestamp: number): string {
     day: 'numeric',
   });
 }
+
+/**
+ * 上传项右侧的状态文案。
+ *
+ * 队列是串行处理的，排在后面的任务在轮到自己之前进度恒为 0——
+ * 直接显示 "0%" 会被误读成"卡住了/没有进度"，所以待传的明确标成 Queued。
+ */
+function uploadStatusText(task: UploadTask): string {
+  if (task.status === 'completed') return 'Done';
+  if (task.status === 'error') return task.error || 'Failed';
+  if (task.status === 'pending') return 'Queued';
+  return `${task.progress}%`;
+}
+
+/** 批量上传的文件数目统计（总数 / 已上传 / 剩余 / 失败） */
+const uploadStats = computed(() => uploadStore.stats);
+
+/** 面板标题：正在传 / 排队中 / 全部完成 / 有失败 */
+const uploadHeadline = computed(() => {
+  const s = uploadStats.value;
+  if (s.remaining > 0) return s.uploading > 0 ? 'Uploading…' : 'Preparing…';
+  return s.failed > 0 ? 'Finished with errors' : 'All uploads complete';
+});
 
 function getFileIcon(file: FileItem): string {
   if (file.type === 'folder') return 'folder';
@@ -174,6 +223,11 @@ async function deleteFile() {
 }
 
 function openShareModal(file: FileItem) {
+  // 弹窗里会出现密码框，浏览器密码管理器可能趁机把账号名写进搜索框，
+  // 这里先把手上的关键词记下来，关闭弹窗时据此校正
+  lastTypedSearch = searchQuery.value;
+  searchInputRef.value?.blur();
+
   selectedForAction.value = file;
   sharePassword.value = '';
   shareExpiry.value = '';
@@ -181,6 +235,19 @@ function openShareModal(file: FileItem) {
   createdShareUrl.value = '';
   showShareModal.value = true;
 }
+
+watch(showShareModal, (open) => {
+  if (open) return;
+  // 关闭后清掉可能被自动填充进去的内容（部分密码管理器不派发 input 事件）
+  const el = searchInputRef.value;
+  if (!el) return;
+  if (el.value !== lastTypedSearch) {
+    el.value = lastTypedSearch;
+  }
+  if (searchQuery.value !== lastTypedSearch) {
+    searchQuery.value = lastTypedSearch;
+  }
+});
 
 async function createShare() {
   if (!selectedForAction.value) return;
@@ -205,20 +272,52 @@ function copyShareUrl() {
   uiStore.showToast('Link copied to clipboard', 'success');
 }
 
+// ---------- 下载 ----------
+
+interface DownloadState {
+  /** 0-100；服务端没给 Content-Length 时为 null（不确定态） */
+  percent: number | null;
+  done: boolean;
+}
+
+/** 按文件 ID 记录进行中的下载，卡片底部据此显示进度 */
+const downloads = reactive<Record<string, DownloadState>>({});
+
+function isDownloading(id: string): boolean {
+  return downloads[id] !== undefined;
+}
+
+function downloadLabel(id: string): string {
+  const state = downloads[id];
+  if (!state) return '';
+  if (state.done) return 'Downloaded';
+  return state.percent === null ? 'Downloading…' : `Downloading ${state.percent}%`;
+}
+
 async function downloadFile(file: FileItem) {
   if (file.type === 'folder') return;
+  // 下载中重复点击直接忽略；刚完成的那 1.4 秒允许再下一次
+  const current = downloads[file.id];
+  if (current && !current.done) return;
+
+  downloads[file.id] = { percent: 0, done: false };
+  const token = localStorage.getItem('token');
+
   try {
-    const response = await fetch(`/api/files/${file.id}/download`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+    await downloadWithProgress(`/api/files/${file.id}/download`, file.name, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      onProgress: (progress) => {
+        downloads[file.id] = { percent: progress.percent, done: false };
+      },
     });
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file.name;
-    a.click();
-    URL.revokeObjectURL(url);
+
+    // 停在 100% 一小会儿，让用户确实看到"已完成"，而不是一闪而过
+    downloads[file.id] = { percent: 100, done: true };
+    window.setTimeout(() => {
+      if (downloads[file.id]?.done) delete downloads[file.id];
+    }, 1400);
   } catch (e: unknown) {
+    delete downloads[file.id];
     uiStore.showToast(e instanceof Error ? e.message : 'Failed to download', 'error');
   }
 }
@@ -226,6 +325,138 @@ async function downloadFile(file: FileItem) {
 function handleContextMenu(event: MouseEvent, file: FileItem) {
   event.preventDefault();
   uiStore.showContextMenu(event.clientX, event.clientY, file);
+}
+
+// ---------- 搜索 ----------
+
+// 记录用户真实输入过的关键词，用来识别浏览器自动填充写入的内容
+let lastTypedSearch = '';
+
+function onSearchInput(event?: Event) {
+  const target = event?.target as HTMLInputElement | undefined;
+
+  // 浏览器密码管理器（弹窗里出现密码框时）会在输入框没有焦点的情况下把账号名写进来，
+  // 这类写入不是用户操作，直接回滚，避免搜索框被填上 "admin" 之类的用户名
+  if (target && document.activeElement !== target) {
+    if (searchQuery.value !== lastTypedSearch) {
+      searchQuery.value = lastTypedSearch;
+    }
+    if (target.value !== lastTypedSearch) {
+      target.value = lastTypedSearch;
+    }
+    return;
+  }
+
+  lastTypedSearch = searchQuery.value;
+  window.clearTimeout(searchTimer);
+  const query = searchQuery.value.trim();
+
+  if (!query) {
+    searchResults.value = [];
+    searching.value = false;
+    return;
+  }
+
+  searchTimer = window.setTimeout(runSearch, 250);
+}
+
+async function runSearch() {
+  const query = searchQuery.value.trim();
+  if (!query) return;
+
+  searching.value = true;
+  try {
+    const data = await api.get<{ query: string; files: SearchResult[] }>(
+      `/files/search?q=${encodeURIComponent(query)}`
+    );
+    // 结果返回时用户可能已经改了关键词，丢弃过期响应
+    if (searchQuery.value.trim() === data.query) {
+      searchResults.value = data.files;
+    }
+  } catch (e: unknown) {
+    uiStore.showToast(e instanceof Error ? e.message : 'Search failed', 'error');
+  } finally {
+    searching.value = false;
+  }
+}
+
+function exitSearch() {
+  window.clearTimeout(searchTimer);
+  searchQuery.value = '';
+  lastTypedSearch = '';
+  searchResults.value = [];
+  searching.value = false;
+}
+
+function openSearchResult(item: SearchResult) {
+  if (item.type === 'folder') {
+    exitSearch();
+    router.push(`/drive/folder/${item.id}`);
+  } else {
+    openPreview(item);
+  }
+}
+
+// ---------- 批量操作 ----------
+
+async function loadMoveFolders(folderId: string | null) {
+  moveLoading.value = true;
+  try {
+    const params = new URLSearchParams();
+    if (folderId) params.set('parent_id', folderId);
+
+    const data = await api.get<{ files: FileItem[]; path: PathItem[] }>(
+      `/files?${params.toString()}`
+    );
+    moveFolders.value = data.files.filter((item) => item.type === 'folder');
+    movePath.value = data.path;
+  } catch (e: unknown) {
+    uiStore.showToast(e instanceof Error ? e.message : 'Failed to load folders', 'error');
+  } finally {
+    moveLoading.value = false;
+  }
+}
+
+function openMoveModal() {
+  if (filesStore.selected.size === 0) return;
+  moveTargetId.value = null;
+  movePath.value = [];
+  showMoveModal.value = true;
+  loadMoveFolders(null);
+}
+
+function enterMoveFolder(folder: FileItem) {
+  if (filesStore.selected.has(folder.id)) return;
+  moveTargetId.value = folder.id;
+  loadMoveFolders(folder.id);
+}
+
+async function confirmMove() {
+  batchBusy.value = true;
+  try {
+    await filesStore.moveFiles(moveTargetId.value);
+    showMoveModal.value = false;
+    uiStore.showToast('Moved successfully', 'success');
+    exitSearch();
+  } catch (e: unknown) {
+    uiStore.showToast(e instanceof Error ? e.message : 'Failed to move', 'error');
+  } finally {
+    batchBusy.value = false;
+  }
+}
+
+async function deleteSelectedFiles() {
+  batchBusy.value = true;
+  try {
+    await filesStore.deleteSelected();
+    showBatchDeleteModal.value = false;
+    uiStore.showToast('Moved to trash', 'success');
+    exitSearch();
+  } catch (e: unknown) {
+    uiStore.showToast(e instanceof Error ? e.message : 'Failed to delete', 'error');
+  } finally {
+    batchBusy.value = false;
+  }
 }
 </script>
 
@@ -247,6 +478,27 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
         </nav>
 
         <div class="header-actions">
+          <div class="search-box">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input
+              ref="searchInputRef"
+              v-model="searchQuery"
+              type="search"
+              name="cfdisk-file-search"
+              placeholder="Search files"
+              autocomplete="off"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
+              data-form-type="other"
+              data-lpignore="true"
+              @input="onSearchInput"
+              @change="onSearchInput"
+              @keyup.esc="exitSearch"
+            />
+          </div>
           <button class="btn-icon" @click="showNewFolderModal = true" title="New Folder">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
@@ -269,6 +521,15 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
         </div>
       </header>
 
+      <!-- 批量操作条 -->
+      <div v-if="filesStore.selected.size > 0 && !searchQuery.trim()" class="selection-bar">
+        <span class="selection-count">{{ filesStore.selected.size }} selected</span>
+        <button class="btn-secondary" @click="filesStore.selectAll()">Select all</button>
+        <button class="btn-secondary" @click="filesStore.clearSelection()">Clear</button>
+        <button class="btn-secondary" @click="openMoveModal">Move to…</button>
+        <button class="btn-danger" @click="showBatchDeleteModal = true">Delete</button>
+      </div>
+
       <div
         class="file-area"
         :class="{ 'drag-over': dragOver }"
@@ -276,6 +537,39 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
         @dragleave="dragOver = false"
         @drop.prevent="handleDrop"
       >
+        <!-- 搜索结果 -->
+        <div v-if="searchQuery.trim()" class="search-panel">
+          <div v-if="searching" class="loading">Searching…</div>
+          <div v-else-if="searchResults.length === 0" class="empty-state">
+            <svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <p>No matches for "{{ searchQuery }}"</p>
+            <p class="hint">Try a shorter keyword</p>
+          </div>
+          <div v-else class="search-list">
+            <div
+              v-for="item in searchResults"
+              :key="item.id"
+              class="search-row"
+              @click="openSearchResult(item)"
+            >
+              <svg v-if="item.type === 'folder'" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="#fbbf24">
+                <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+              </svg>
+              <svg v-else xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>
+              </svg>
+              <div class="search-info">
+                <span class="search-name">{{ item.name }}</span>
+                <span class="search-path">{{ item.path.length ? item.path.join(' / ') : 'My Files' }}</span>
+              </div>
+              <span class="search-size">{{ item.type === 'file' ? formatBytes(item.size) : '' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <template v-else>
         <div v-if="filesStore.loading" class="loading">Loading...</div>
 
         <div v-else-if="filesStore.sortedFiles.length === 0" class="empty-state">
@@ -297,15 +591,17 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
             @contextmenu="handleContextMenu($event, file)"
           >
             <div class="file-icon" :class="getFileIcon(file)">
+              <!-- 图片：优先显示真实缩略图，加载失败或大图回退为图标 -->
+              <FileThumb v-if="getFileIcon(file) === 'image'" :file="file">
+                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                  <circle cx="8.5" cy="8.5" r="1.5"/>
+                  <polyline points="21 15 16 10 5 21"/>
+                </svg>
+              </FileThumb>
               <!-- 文件夹 -->
-              <svg v-if="file.type === 'folder'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
+              <svg v-else-if="file.type === 'folder'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
-              </svg>
-              <!-- 图片 -->
-              <svg v-else-if="getFileIcon(file) === 'image'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                <circle cx="8.5" cy="8.5" r="1.5"/>
-                <polyline points="21 15 16 10 5 21"/>
               </svg>
               <!-- 视频 -->
               <svg v-else-if="getFileIcon(file) === 'video'" xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -377,8 +673,29 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
               <span>{{ formatDate(file.updated_at) }}</span>
             </div>
             <div class="file-actions">
-              <button @click.stop="downloadFile(file)" title="Download" v-if="file.type === 'file'">
+              <button @click.stop="openPreview(file)" title="Preview" v-if="file.type === 'file'">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+              <button
+                data-action="download"
+                @click.stop="downloadFile(file)"
+                :disabled="!!downloads[file.id]"
+                :title="isDownloading(file.id) ? downloadLabel(file.id) : 'Download'"
+                :class="{
+                  'is-downloading': !!downloads[file.id] && !downloads[file.id]?.done,
+                  'is-done': downloads[file.id]?.done,
+                }"
+                v-if="file.type === 'file'"
+              >
+                <!-- 下载中：转圈；已完成：勾 -->
+                <span v-if="downloads[file.id] && !downloads[file.id]?.done" class="mini-spinner" aria-hidden="true"></span>
+                <svg v-else-if="downloads[file.id]?.done" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
                 </svg>
               </button>
@@ -400,15 +717,81 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
                 </svg>
               </button>
             </div>
+
+            <!-- 下载状态：常驻卡片底部，鼠标移开、按钮消失后依然能看到进度 -->
+            <div
+              v-if="downloads[file.id]"
+              class="download-badge"
+              :class="{ done: downloads[file.id]?.done }"
+              role="status"
+              :aria-label="downloadLabel(file.id)"
+            >
+              <div class="download-badge-track">
+                <div
+                  class="download-badge-fill"
+                  :class="{
+                    indeterminate: downloads[file.id]?.percent === null,
+                    done: downloads[file.id]?.done,
+                  }"
+                  :style="{ width: `${downloads[file.id]?.percent ?? 0}%` }"
+                ></div>
+              </div>
+              <span class="download-badge-text">{{ downloadLabel(file.id) }}</span>
+            </div>
           </div>
         </div>
+        </template>
       </div>
 
       <!-- Upload Progress -->
       <div v-if="uploadStore.queue.length > 0" class="upload-panel">
         <div class="upload-header">
-          <span>Uploads ({{ uploadStore.activeUploads }} active)</span>
-          <button @click="uploadStore.clearCompleted">Clear completed</button>
+          <div class="upload-head-top">
+            <span
+              class="upload-title"
+              :class="{
+                'is-done': uploadStats.remaining === 0 && uploadStats.failed === 0,
+                'is-error': uploadStats.remaining === 0 && uploadStats.failed > 0,
+              }"
+            >
+              {{ uploadHeadline }}
+            </span>
+            <button @click="uploadStore.clearCompleted">Clear completed</button>
+          </div>
+          <div v-if="uploadStore.isBatch" class="upload-counts">
+            <span class="upload-count">
+              <b>{{ uploadStats.total }}</b> total
+            </span>
+            <span class="upload-count-dot">·</span>
+            <span class="upload-count is-done">
+              <b>{{ uploadStats.completed }}</b> uploaded
+            </span>
+            <span class="upload-count-dot">·</span>
+            <span class="upload-count is-left">
+              <b>{{ uploadStats.remaining }}</b> remaining
+            </span>
+            <template v-if="uploadStats.failed > 0">
+              <span class="upload-count-dot">·</span>
+              <span class="upload-count is-failed">
+                <b>{{ uploadStats.failed }}</b> failed
+              </span>
+            </template>
+          </div>
+        </div>
+        <div
+          v-if="uploadStore.isBatch"
+          class="upload-overall"
+          :class="{ 'is-done': uploadStats.remaining === 0 && uploadStats.failed === 0 }"
+          role="progressbar"
+          :aria-valuenow="uploadStats.percent"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-label="`${uploadStats.completed} of ${uploadStats.total} files uploaded`"
+        >
+          <div class="upload-overall-track">
+            <div class="upload-overall-bar" :style="{ width: `${uploadStats.percent}%` }"></div>
+          </div>
+          <span class="upload-overall-label">{{ uploadStats.percent }}%</span>
         </div>
         <div class="upload-list">
           <div v-for="task in uploadStore.queue" :key="task.id" class="upload-item">
@@ -417,7 +800,7 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
               <div class="upload-bar" :style="{ width: `${task.progress}%` }"></div>
             </div>
             <span class="upload-status" :class="task.status">
-              {{ task.status === 'completed' ? 'Done' : task.status === 'error' ? task.error : `${task.progress}%` }}
+              {{ uploadStatusText(task) }}
             </span>
           </div>
         </div>
@@ -470,18 +853,43 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
         <div v-if="showShareModal" class="modal-overlay" @click="showShareModal = false">
           <div class="modal" @click.stop>
             <h3>Share "{{ selectedForAction?.name }}"</h3>
-            <div v-if="!createdShareUrl" class="share-form">
+            <div v-if="!createdShareUrl" class="share-form" autocomplete="off">
               <div class="form-group">
                 <label>Password (optional)</label>
-                <input v-model="sharePassword" type="password" placeholder="Leave empty for no password" />
+                <input
+                  v-model="sharePassword"
+                  type="password"
+                  name="cfdisk-share-password"
+                  placeholder="Leave empty for no password"
+                  autocomplete="new-password"
+                  data-form-type="other"
+                  data-lpignore="true"
+                />
               </div>
               <div class="form-group">
                 <label>Expiry (hours, optional)</label>
-                <input v-model="shareExpiry" type="number" placeholder="e.g., 24" />
+                <input
+                  v-model="shareExpiry"
+                  type="number"
+                  name="cfdisk-share-expiry"
+                  placeholder="e.g., 24"
+                  autocomplete="off"
+                  data-form-type="other"
+                  data-lpignore="true"
+                />
               </div>
               <div class="form-group">
                 <label>Allowed domains (comma-separated, for hotlink protection)</label>
-                <input v-model="shareReferers" placeholder="e.g., example.com, *.mysite.com" />
+                <input
+                  v-model="shareReferers"
+                  name="cfdisk-share-referers"
+                  placeholder="e.g., example.com, *.mysite.com"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  data-form-type="other"
+                  data-lpignore="true"
+                />
               </div>
               <div class="modal-actions">
                 <button class="btn-secondary" @click="showShareModal = false">Cancel</button>
@@ -494,6 +902,63 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
                 <button class="btn-primary" @click="copyShareUrl">Copy Link</button>
                 <button class="btn-secondary" @click="showShareModal = false">Close</button>
               </div>
+            </div>
+          </div>
+        </div>
+      </Teleport>
+
+      <!-- Move Modal -->
+      <Teleport to="body">
+        <div v-if="showMoveModal" class="modal-overlay" @click="showMoveModal = false">
+          <div class="modal modal-wide" @click.stop>
+            <h3>Move {{ filesStore.selected.size }} item(s)</h3>
+
+            <div class="picker-path">
+              <button class="link-btn" @click="moveTargetId = null; loadMoveFolders(null)">My Files</button>
+              <template v-for="node in movePath" :key="node.id">
+                <span class="picker-sep">/</span>
+                <button class="link-btn" @click="moveTargetId = node.id; loadMoveFolders(node.id)">{{ node.name }}</button>
+              </template>
+            </div>
+
+            <div class="picker-list">
+              <div v-if="moveLoading" class="picker-empty">Loading…</div>
+              <div v-else-if="moveFolders.length === 0" class="picker-empty">No subfolders here</div>
+              <template v-else>
+                <div v-for="folder in moveFolders" :key="folder.id" class="picker-row">
+                  <button
+                    class="picker-select"
+                    :class="{ active: moveTargetId === folder.id }"
+                    :disabled="filesStore.selected.has(folder.id)"
+                    @click="moveTargetId = folder.id"
+                  >
+                    {{ folder.name }}
+                    <span v-if="filesStore.selected.has(folder.id)" class="picker-note">moving</span>
+                  </button>
+                  <button class="picker-open" title="Open folder" @click="enterMoveFolder(folder)">›</button>
+                </div>
+              </template>
+            </div>
+
+            <p class="picker-hint">Destination: <strong>{{ moveTargetName }}</strong></p>
+
+            <div class="modal-actions">
+              <button class="btn-secondary" @click="showMoveModal = false">Cancel</button>
+              <button class="btn-primary" :disabled="batchBusy" @click="confirmMove">Move here</button>
+            </div>
+          </div>
+        </div>
+      </Teleport>
+
+      <!-- Batch Delete Modal -->
+      <Teleport to="body">
+        <div v-if="showBatchDeleteModal" class="modal-overlay" @click="showBatchDeleteModal = false">
+          <div class="modal" @click.stop>
+            <h3>Move {{ filesStore.selected.size }} item(s) to Trash?</h3>
+            <p>Deleted items stay in Trash until you empty it.</p>
+            <div class="modal-actions">
+              <button class="btn-secondary" @click="showBatchDeleteModal = false">Cancel</button>
+              <button class="btn-danger" :disabled="batchBusy" @click="deleteSelectedFiles">Delete</button>
             </div>
           </div>
         </div>
@@ -512,6 +977,8 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+  gap: 0.75rem;
 }
 
 .breadcrumb {
@@ -519,6 +986,8 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   align-items: center;
   gap: 0.5rem;
   font-size: 1.125rem;
+  flex-wrap: wrap;
+  overflow: hidden;
 }
 
 .breadcrumb-sep {
@@ -542,6 +1011,7 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 .header-actions {
   display: flex;
   gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 .btn-icon {
@@ -571,6 +1041,7 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   align-items: center;
   gap: 0.5rem;
   transition: background 0.2s;
+  white-space: nowrap;
 }
 
 .btn-primary:hover {
@@ -635,6 +1106,76 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   padding: 1.5rem;
 }
 
+@media (max-width: 768px) {
+  .drive-view {
+    padding: 1rem;
+  }
+
+  .drive-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .breadcrumb {
+    font-size: 1rem;
+    max-width: 100%;
+  }
+
+  .file-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.75rem;
+    padding: 1rem;
+  }
+
+  .file-item {
+    padding: 0.75rem;
+  }
+
+  .file-icon {
+    height: 80px;
+  }
+
+  .file-name {
+    font-size: 0.875rem;
+  }
+}
+
+/* 注意：上传面板的移动端样式写在文件末尾（基础规则之后），
+   否则同优先级下会被后面声明的桌面端规则覆盖 —— 之前就是这样导致
+   面板压在底部导航栏上、最后一个上传项被遮住。 */
+
+@media (max-width: 480px) {
+  .file-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+    padding: 0.5rem;
+  }
+
+  .file-item {
+    min-width: 0; /* 防止 flex 子项溢出 */
+  }
+
+  .file-name {
+    font-size: 0.8rem;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+
+  .file-meta {
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .btn-primary span {
+    display: none;
+  }
+
+  .btn-primary {
+    padding: 0.625rem;
+  }
+}
+
 .file-item {
   background: #f8fafc;
   border-radius: 12px;
@@ -656,7 +1197,10 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 
 .file-icon {
   display: flex;
+  align-items: center;
   justify-content: center;
+  width: 100%;
+  height: 96px;
   margin-bottom: 0.75rem;
 }
 
@@ -707,10 +1251,15 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 .file-name {
   font-weight: 500;
   text-align: center;
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   margin-bottom: 0.5rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  word-break: break-all;
+  max-width: 100%;
 }
 
 .file-meta {
@@ -718,6 +1267,8 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   justify-content: space-between;
   font-size: 0.75rem;
   color: #94a3b8;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .file-actions {
@@ -728,20 +1279,38 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   gap: 0.25rem;
   opacity: 0;
   transition: opacity 0.2s;
+  /* 图片缩略图会占满卡片上方的图标区，必须明确声明层级，否则按钮会被压在图片下面 */
+  z-index: 2;
 }
 
 .file-item:hover .file-actions {
   opacity: 1;
 }
 
+@media (max-width: 768px) {
+  .file-actions {
+    opacity: 1;
+    position: static;
+    justify-content: center;
+    margin-top: 0.5rem;
+  }
+
+  .file-item:hover .file-actions {
+    opacity: 1;
+  }
+}
+
 .file-actions button {
-  background: #fff;
+  /* 半透明白底 + 背景模糊：按钮压在照片上时依然能看清图标 */
+  background: rgba(255, 255, 255, 0.92);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
   border: none;
   padding: 0.375rem;
   border-radius: 6px;
   cursor: pointer;
-  color: #64748b;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  color: #475569;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
 }
 
 .file-actions button:hover {
@@ -752,11 +1321,125 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
   color: #dc2626;
 }
 
+.file-actions button:disabled {
+  cursor: default;
+  color: #2563eb;
+}
+
+.file-actions button.is-done {
+  color: #16a34a;
+}
+
+/* 下载中按钮里的转圈图标 */
+.mini-spinner {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(37, 99, 235, 0.25);
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: mini-spin 0.7s linear infinite;
+}
+
+@keyframes mini-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 下载状态条：贴在卡片底部，鼠标移出（按钮消失）后仍可见 */
+.download-badge {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0.4rem 0.7rem 0.5rem;
+  border-radius: 0 0 12px 12px;
+  background: linear-gradient(to top, rgba(255, 255, 255, 0.97), rgba(255, 255, 255, 0.82));
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  /* 不拦截点击，卡片仍然可以选中 / 双击打开 */
+  pointer-events: none;
+  z-index: 3;
+}
+
+.download-badge-track {
+  height: 3px;
+  border-radius: 999px;
+  background: #dbeafe;
+  overflow: hidden;
+}
+
+.download-badge-fill {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 0.18s ease-out;
+}
+
+/* 服务端没给 Content-Length 时用滑动条表示"还在下"，不要假装知道百分比 */
+.download-badge-fill.indeterminate {
+  width: 35%;
+  animation: download-slide 1.1s ease-in-out infinite;
+}
+
+.download-badge-fill.done {
+  width: 100% !important;
+  background: #16a34a;
+}
+
+.download-badge-text {
+  font-size: 0.7rem;
+  font-weight: 500;
+  line-height: 1.1;
+  text-align: center;
+  color: #1d4ed8;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.download-badge.done .download-badge-text {
+  color: #15803d;
+}
+
+@keyframes download-slide {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+@media (max-width: 768px) {
+  /* 移动端的操作按钮是静态布局排在卡片底部，
+     进度条必须回到文档流里，否则会盖住按钮 */
+  .download-badge {
+    position: static;
+    margin-top: 0.45rem;
+    padding: 0.4rem 0.5rem;
+    border-radius: 8px;
+    background: #eff6ff;
+    gap: 0.25rem;
+  }
+
+  .download-badge-text {
+    font-size: 0.66rem;
+  }
+}
+
 .upload-panel {
   position: fixed;
   bottom: 1.5rem;
   right: 1.5rem;
   width: 320px;
+  /* 卡片右上角的操作按钮是 z-index:2 的绝对定位元素，会盖在 fixed 面板之上，
+     点 "Clear completed" 时会被某个被遮住的删除按钮截获 → 给面板抬到它们之上 */
+  z-index: 50;
   background: #fff;
   border-radius: 12px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
@@ -765,20 +1448,121 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 
 .upload-header {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.875rem 1rem;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.75rem 1rem;
   background: #f1f5f9;
   border-bottom: 1px solid #e2e8f0;
+}
+
+.upload-head-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
   font-weight: 500;
 }
 
+.upload-title {
+  font-size: 0.875rem;
+  color: #0f172a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upload-title.is-done {
+  color: #15803d;
+}
+
+.upload-title.is-error {
+  color: #b45309;
+}
+
 .upload-header button {
+  flex: none;
   background: none;
   border: none;
   color: #1e40af;
   cursor: pointer;
   font-size: 0.75rem;
+  padding: 0;
+}
+
+.upload-header button:hover {
+  text-decoration: underline;
+}
+
+/*
+ * 文件数目统计行：`12 total · 5 uploaded · 6 remaining`。
+ * 允许换行——中文/窄屏 + 出现 failed 时一行放不下，硬撑会挤成省略号。
+ */
+.upload-counts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 0.3rem;
+  font-size: 0.75rem;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.upload-count b {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.upload-count.is-done b {
+  color: #16a34a;
+}
+
+.upload-count.is-left b {
+  color: #1e40af;
+}
+
+.upload-count.is-failed b {
+  color: #dc2626;
+}
+
+.upload-count-dot {
+  color: #cbd5e1;
+}
+
+/* 队列整体进度条（只在批量上传时出现） */
+.upload-overall {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.upload-overall-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.upload-overall-bar {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #3b82f6, #6366f1);
+  transition: width 0.3s ease;
+}
+
+.upload-overall.is-done .upload-overall-bar {
+  background: #22c55e;
+}
+
+.upload-overall-label {
+  min-width: 2.2rem;
+  font-size: 0.7rem;
+  color: #64748b;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .upload-list {
@@ -818,8 +1602,14 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 
 .upload-status {
   font-size: 0.75rem;
-  width: 40px;
+  /* 状态可能是 Done / Queued / 100% / 错误文案，固定 40px 会挤成两行 */
+  min-width: 3.5rem;
   text-align: right;
+  white-space: nowrap;
+}
+
+.upload-status.pending {
+  color: #94a3b8;
 }
 
 .upload-status.completed {
@@ -888,5 +1678,261 @@ function handleContextMenu(event: MouseEvent, file: FileItem) {
 .share-url {
   font-family: monospace;
   font-size: 0.875rem;
+}
+
+/* 搜索框 */
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #94a3b8;
+}
+
+.search-box:focus-within {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.search-box input {
+  border: none;
+  outline: none;
+  padding: 0.625rem 0;
+  font-size: 0.875rem;
+  width: 180px;
+  color: #0f172a;
+  background: transparent;
+}
+
+/* 批量操作条 */
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.625rem 0.875rem;
+  margin-bottom: 1rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+}
+
+.selection-count {
+  font-weight: 600;
+  color: #1e40af;
+  margin-right: auto;
+}
+
+.selection-bar .btn-secondary,
+.selection-bar .btn-danger {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+/* 搜索结果 */
+.search-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 10px;
+  cursor: pointer;
+  color: #475569;
+}
+
+.search-row:hover {
+  background: #f1f5f9;
+}
+
+.search-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.search-name {
+  font-weight: 500;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-path {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-size {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+/* 文件夹选择器 */
+.modal-wide {
+  max-width: 520px;
+}
+
+.picker-path {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  font-size: 0.875rem;
+  margin-bottom: 0.75rem;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #1e40af;
+  cursor: pointer;
+  font-size: inherit;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+.picker-sep {
+  color: #94a3b8;
+}
+
+.picker-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.picker-empty {
+  padding: 1rem;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 0.875rem;
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.picker-select {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+  color: #0f172a;
+  font-size: 0.875rem;
+}
+
+.picker-select:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.picker-select.active {
+  background: #dbeafe;
+  color: #1e40af;
+  font-weight: 600;
+}
+
+.picker-select:disabled {
+  color: #cbd5e1;
+  cursor: not-allowed;
+}
+
+.picker-note {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.picker-open {
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 1.125rem;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+}
+
+.picker-open:hover {
+  background: #f1f5f9;
+  color: #1e40af;
+}
+
+.picker-hint {
+  font-size: 0.875rem;
+  color: #64748b;
+  margin-bottom: 1rem;
+}
+
+/*
+ * 上传进度面板的移动端样式。
+ *
+ * 必须放在所有基础规则之后：CSS 同优先级下后者胜出，之前这段写在文件
+ * 中间（基础 .upload-panel 之前），bottom/width 全被桌面端规则覆盖，
+ * 面板实际 bottom 只有 24px，直接压在 60px 高的底部导航栏上，
+ * 于是最后一个上传项被导航栏遮住、看不到进度。
+ *
+ * 另外用 flex + max-height 兜住小屏：文件一多，列表内部滚动，
+ * 面板整体不会长到超出屏幕顶部。
+ */
+@media (max-width: 768px) {
+  .upload-panel {
+    left: 0.75rem;
+    right: 0.75rem;
+    /* 左+右 + width:auto 才是撑满，三者同时写会变成过度约束 */
+    width: auto;
+    /* 底部导航栏 60px + 间距 + iPhone home indicator 安全区 */
+    bottom: calc(60px + 1rem + env(safe-area-inset-bottom, 0px));
+    /* 最多占 60% 屏高，剩下的让给文件列表；超出的项在列表内部滚动 */
+    max-height: 60vh;
+    max-height: 60dvh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .upload-header {
+    flex: none;
+  }
+
+  .upload-list {
+    flex: 1 1 auto;
+    max-height: none;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  .upload-item {
+    /* 触屏上太窄会把文件名压成一两个字，状态也跟着挤 */
+    padding: 0.625rem 0.875rem;
+  }
 }
 </style>

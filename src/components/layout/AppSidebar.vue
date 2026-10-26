@@ -28,6 +28,10 @@ async function handleLogout() {
   await authStore.logout();
   router.push('/login');
 }
+
+function openChangePassword() {
+  uiStore.openModal('changePassword');
+}
 </script>
 
 <template>
@@ -69,6 +73,15 @@ async function handleLogout() {
         </svg>
         <span>Admin</span>
       </router-link>
+
+      <!-- 移动端底栏没有侧边栏页脚，单独给一个账号入口 -->
+      <button class="nav-item mobile-only" @click="openChangePassword">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="4" y="11" width="16" height="10" rx="2"/>
+          <path d="M8 11V7a4 4 0 118 0v4"/>
+        </svg>
+        <span>Account</span>
+      </button>
     </nav>
 
     <div class="sidebar-footer">
@@ -91,6 +104,12 @@ async function handleLogout() {
           <span class="user-name">{{ authStore.user?.username }}</span>
           <span class="user-role">{{ authStore.user?.role }}</span>
         </div>
+        <button class="logout-btn" @click="openChangePassword" title="Change password">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="4" y="11" width="16" height="10" rx="2"/>
+            <path d="M8 11V7a4 4 0 118 0v4"/>
+          </svg>
+        </button>
         <button class="logout-btn" @click="handleLogout" title="Logout">
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
@@ -185,6 +204,21 @@ async function handleLogout() {
   color: #fff;
 }
 
+/* 移动端专用入口，桌面端隐藏 */
+.nav-item.mobile-only {
+  display: none;
+}
+
+button.nav-item {
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
 .sidebar-footer {
   padding: 1rem;
   border-top: 1px solid #1e3a8a;
@@ -274,5 +308,62 @@ async function handleLogout() {
 .logout-btn:hover {
   background: #1e3a8a;
   color: #fff;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .sidebar {
+    width: 100%;
+    height: 60px;
+    flex-direction: row;
+    top: auto;
+    bottom: 0;
+    left: 0;
+    border-top: 1px solid #1e3a8a;
+  }
+
+  .sidebar.collapsed {
+    width: 100%;
+  }
+
+  .sidebar-header {
+    display: none;
+  }
+
+  .sidebar-nav {
+    flex-direction: row;
+    justify-content: space-around;
+    padding: 0.5rem;
+    flex: 1;
+  }
+
+  .nav-item {
+    flex-direction: column;
+    padding: 0.25rem 0.5rem;
+    gap: 0.25rem;
+    font-size: 0.7rem;
+  }
+
+  .nav-item span {
+    font-size: 0.65rem;
+  }
+
+  .nav-item.mobile-only {
+    display: flex;
+  }
+
+  .sidebar-footer {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .nav-item span {
+    display: none;
+  }
+
+  .nav-item {
+    padding: 0.5rem;
+  }
 }
 </style>

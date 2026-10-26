@@ -6,9 +6,11 @@
 	"scripts": {
 		"dev": "vite",
 		"build": "run-p type-check \"build-only {@}\" --",
-		"preview": "npm run build && wrangler dev",
+		"preview": "npm run build && wrangler dev --config dist/cfdisk/wrangler.json --persist-to .wrangler/state",
 		"build-only": "vite build",
 		"type-check": "vue-tsc --build",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"deploy": "npm run build && wrangler deploy",
 		"cf-typegen": "wrangler types"
 	},
@@ -27,6 +29,7 @@
 		"typescript": "~5.9.3",
 		"vite": "^7.3.1",
 		"vite-plugin-vue-devtools": "^8.0.6",
+		"vitest": "^5.0.5",
 		"vue-tsc": "^3.2.5",
 		"wrangler": "^4.70.0"
 	},

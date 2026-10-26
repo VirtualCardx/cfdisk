@@ -20,9 +20,13 @@ export function error(code: string, message: string, status = 400): Response {
 export const errors = {
   badRequest: (message = 'Bad request') => error('BAD_REQUEST', message, 400),
   unauthorized: (message = 'Unauthorized') => error('UNAUTHORIZED', message, 401),
+  tokenRevoked: () =>
+    error('TOKEN_REVOKED', 'Session has been revoked, please sign in again', 401),
   forbidden: (message = 'Forbidden') => error('FORBIDDEN', message, 403),
   notFound: (message = 'Not found') => error('NOT_FOUND', message, 404),
   conflict: (message = 'Conflict') => error('CONFLICT', message, 409),
+  uploadSessionMissing: () =>
+    error('UPLOAD_SESSION_MISSING', 'Upload session expired, please restart from the first chunk', 409),
   serverError: (message = 'Internal server error') => error('SERVER_ERROR', message, 500),
   quotaExceeded: (message = 'Storage quota exceeded') => error('QUOTA_EXCEEDED', message, 413),
   invalidInviteCode: () => error('INVALID_INVITE_CODE', 'Invalid or expired invite code', 400),
@@ -30,5 +34,11 @@ export const errors = {
   userDisabled: () => error('USER_DISABLED', 'User account is disabled', 403),
   shareExpired: () => error('SHARE_EXPIRED', 'This share link has expired', 410),
   sharePasswordRequired: () => error('SHARE_PASSWORD_REQUIRED', 'Password required', 401),
+  sharePasswordIncorrect: () => error('SHARE_PASSWORD_INCORRECT', 'Incorrect password', 400),
   refererNotAllowed: () => error('REFERER_NOT_ALLOWED', 'Access denied', 403),
+  rateLimited: (retryAfter: number) => {
+    const response = error('RATE_LIMITED', 'Too many requests, please retry later', 429);
+    response.headers.set('Retry-After', String(retryAfter));
+    return response;
+  },
 };

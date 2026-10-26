@@ -1,6 +1,7 @@
 import { success, errors } from '../utils/response';
 import { authenticate, isAuthContext, requireAdmin } from '../middleware/auth';
 import { isValidUUID, generateInviteCode } from '../utils/validate';
+import { bumpTokenVersion } from '../utils/session';
 
 interface UserRecord {
   id: string;
@@ -128,6 +129,11 @@ export async function handleSetUserStatus(request: Request, env: Env, userId?: s
     )
       .bind(is_active ? 1 : 0, Date.now(), userId)
       .run();
+
+    // 否则重新启用后，禁用期间未过期的 token 会直接复活
+    if (!is_active) {
+      await bumpTokenVersion(env, userId);
+    }
 
     return success({ message: is_active ? 'User enabled' : 'User disabled' });
   } catch (e) {
@@ -332,6 +338,9 @@ export async function handleSetUserRole(request: Request, env: Env, userId?: str
     )
       .bind(role, Date.now(), userId)
       .run();
+
+    // 提权/降权属于安全事件，强制重新登录以拿到新角色
+    await bumpTokenVersion(env, userId);
 
     return success({ message: 'User role updated' });
   } catch (e) {

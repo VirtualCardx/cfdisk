@@ -279,7 +279,7 @@ function isExpired(share: ShareItem): boolean {
 }
 
 .btn-danger {
-  background: #333;
+  background: #dc2626;
   color: #fff;
   border: none;
   padding: 0.5rem 1rem;
@@ -289,8 +289,8 @@ function isExpired(share: ShareItem): boolean {
 
 .btn-danger-outline {
   background: #fff;
-  color: #333;
-  border: 1px solid #666;
+  color: #dc2626;
+  border: 1px solid #dc2626;
   padding: 0.5rem 1rem;
   border-radius: 6px;
   cursor: pointer;
@@ -328,5 +328,26 @@ function isExpired(share: ShareItem): boolean {
   display: flex;
   gap: 0.75rem;
   justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+  .shares-view {
+    padding: 1rem;
+  }
+
+  .share-item {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .share-url {
+    width: 100%;
+    margin-top: 0.5rem;
+  }
+
+  .share-url input {
+    flex: 1;
+    width: auto;
+  }
 }
 </style>

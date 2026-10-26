@@ -11,6 +11,8 @@ export interface FileItem {
   size: number;
   created_at: number;
   updated_at: number;
+  /** 服务端签发的小图地址；没有缩略图时为 null（历史文件首次显示时补生成） */
+  thumb_url?: string | null;
 }
 
 export interface PathItem {
@@ -144,6 +146,15 @@ export const useFilesStore = defineStore('files', () => {
     selected.value.clear();
   }
 
+  function setThumbUrl(fileId: string, thumbUrl: string | null): void {
+    const index = files.value.findIndex((f) => f.id === fileId);
+    if (index === -1) return;
+    const current = files.value[index];
+    if (current) {
+      files.value[index] = { ...current, thumb_url: thumbUrl };
+    }
+  }
+
   function setViewMode(mode: 'grid' | 'list'): void {
     viewMode.value = mode;
   }
@@ -174,6 +185,7 @@ export const useFilesStore = defineStore('files', () => {
     toggleSelect,
     selectAll,
     clearSelection,
+    setThumbUrl,
     setViewMode,
     setSort,
   };

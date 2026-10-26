@@ -84,7 +84,14 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
-    await api.put('/auth/password', { old_password: oldPassword, new_password: newPassword });
+    const data = await api.put<{ message: string; token: string }>('/auth/password', {
+      old_password: oldPassword,
+      new_password: newPassword,
+    });
+    // 改密会作废此前的所有 token，服务端给当前设备补发了一个
+    if (data.token) {
+      setToken(data.token);
+    }
   }
 
   function updateStorageUsed(delta: number): void {
