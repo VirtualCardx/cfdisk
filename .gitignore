@@ -48,3 +48,7 @@ __screenshots__/
 # WorkBuddy 工作区元数据
 .workbuddy/
 .playwright-cli/
+
+# Playwright 调试产物（aria snapshot 等）
+fix.yaml
+*.aria.yaml
