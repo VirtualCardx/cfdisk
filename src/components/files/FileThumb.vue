@@ -207,7 +207,15 @@ onBeforeUnmount(() => {
   position: relative;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /*
+   * contain 而不是 cover：缩略图区域是「卡片宽 × 96px」的扁矩形，
+   * cover 会把竖图、超宽图裁掉一大截，用户只能看到画面局部（人脸常被裁掉半张）。
+   * contain 保证整张图完整可见，代价是比例不匹配时四周留白，
+   * 用下面的浅色底把留白填成中性的「相框」，比露出卡片底色更干净。
+   */
+  object-fit: contain;
+  object-position: center;
+  background: #f1f5f9;
   display: block;
   opacity: 0;
   transition: opacity 0.2s ease;
