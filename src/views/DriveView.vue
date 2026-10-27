@@ -1131,9 +1131,8 @@ async function deleteSelectedFiles() {
     padding: 0.75rem;
   }
 
-  .file-icon {
-    height: 80px;
-  }
+  /* 不再单独写死高度：相框比例由 aspect-ratio 统一控制，
+     移动端卡片更窄，高度会跟着缩小，不需要另一套数值。 */
 
   .file-name {
     font-size: 0.875rem;
@@ -1200,7 +1199,17 @@ async function deleteSelectedFiles() {
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 96px;
+  /*
+   * 固定 4:3 而不是写死 96px 高。
+   *
+   * 卡片宽度由 grid 的 minmax(180px, 1fr) 决定，会随视口在 150~200px 之间浮动；
+   * 高度写死时相框比例跟着一起漂（窄屏 1.5:1、宽屏接近 2:1），竖图被裁得只剩中间一条。
+   * 用 aspect-ratio 锁定比例后，任何列宽下相框都一致，缩略图区域的高度自然跟着宽度走。
+   *
+   * 4:3 的取舍：手机照片 4:3 / 3:4 都接近满铺，16:9 截图上下留白约 12%，
+   * 1:1 方图左右留白约 12%，是各类素材里最均衡的一档。
+   */
+  aspect-ratio: 4 / 3;
   margin-bottom: 0.75rem;
 }
 
