@@ -20,7 +20,9 @@ import type { FileItem } from '@/stores/files';
 const emit = defineEmits<{ (e: 'action', key: string, file: FileItem): void }>();
 
 const props = defineProps<{
-  /** 当前选中的条目数；> 1 时菜单切换成批量语境 */
+  /** 目标条目处于批量语境（右键项已在多选集合里且集合不止一项） */
+  batch?: boolean;
+  /** 当前选中的条目数，仅用于批量语境下的头部说明 */
   selectionCount?: number;
 }>();
 
@@ -41,18 +43,22 @@ const visible = ref(false);
 const file = computed(() => uiStore.contextMenu?.file ?? null);
 
 /**
- * 多选状态下的菜单必须只留批量操作。
+ * 批量语境下的菜单只留批量操作。
  *
- * Share / Rename / View details 天然只作用于单个文件，混在「已选 3 项」的菜单里，
- * 用户会以为点下去是对三项都生效——所以多选时直接把这几项摘掉，只留能给整批用的两个。
+ * Share / Rename / Download 天然只作用于单个文件，混在「已选 3 项」的菜单里，
+ * 用户会以为点下去是对三项都生效——所以批量时直接把这几项摘掉。
+ *
+ * 注意判断依据是父组件传入的 `batch`，而不是 `selectionCount > 1`：
+ * 右键点在**未选中**的条目上时，选择集里可能还留着几项，但这次操作只针对右键项，
+ * 菜单必须回到单项形态，否则会出现「菜单显示批量、实际只处理一个」的错位。
  */
-const isMulti = computed(() => (props.selectionCount ?? 0) > 1);
+const isBatch = computed(() => props.batch === true);
 
 const entries = computed<MenuEntry[]>(() => {
   const current = file.value;
   if (!current) return [];
 
-  if (isMulti.value) {
+  if (isBatch.value) {
     return [
       { key: 'move', label: 'Move…' },
       { key: 'delete', label: 'Move to Trash', danger: true },
@@ -153,7 +159,7 @@ onBeforeUnmount(() => {
       role="menu"
       @contextmenu.prevent
     >
-      <div v-if="isMulti" class="ctx-head">{{ selectionCount }} items selected</div>
+      <div v-if="isBatch" class="ctx-head">{{ selectionCount }} items selected</div>
       <template v-for="(entry, index) in entries" :key="entry.key ?? `sep-${index}`">
         <div v-if="entry.divider" class="ctx-sep" role="separator"></div>
         <button

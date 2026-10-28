@@ -123,11 +123,21 @@ export const useFilesStore = defineStore('files', () => {
     }
   }
 
-  async function moveFiles(targetId: string | null): Promise<void> {
-    const ids = Array.from(selected.value);
-    await api.put('/files/move', { ids, target_id: targetId });
-    files.value = files.value.filter((f) => !selected.value.has(f.id));
-    selected.value.clear();
+  /**
+   * 移动文件到目标文件夹。
+   *
+   * `ids` 不传时用当前选择集；右键单项但该项没被选中时，调用方会显式传 `[id]`——
+   * 这样「右键 → 移动」不必先把这一项塞进选择集，选择状态保持原样。
+   */
+  async function moveFiles(targetId: string | null, ids?: string[]): Promise<void> {
+    const moving = ids ?? Array.from(selected.value);
+    if (moving.length === 0) return;
+
+    await api.put('/files/move', { ids: moving, target_id: targetId });
+
+    const moved = new Set(moving);
+    files.value = files.value.filter((f) => !moved.has(f.id));
+    moving.forEach((id) => selected.value.delete(id));
   }
 
   function toggleSelect(fileId: string): void {

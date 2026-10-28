@@ -38,6 +38,8 @@ const showInfoModal = ref(false);
 const infoFile = ref<FileItem | null>(null);
 const batchBusy = ref(false);
 const moveTargetId = ref<string | null>(null);
+/** 本次移动的目标条目 id（选择集或单个右键项） */
+const moveIds = ref<string[]>([]);
 const moveFolders = ref<FileItem[]>([]);
 const movePath = ref<PathItem[]>([]);
 const moveLoading = ref(false);
@@ -332,27 +334,42 @@ function activateItem(file: FileItem) {
   openFolder(file);
 }
 
-/** 把选择重置为仅这一项（右键操作、单项弹窗前调用） */
-function selectOnly(file: FileItem) {
-  filesStore.clearSelection();
-  filesStore.selected.add(file.id);
+/**
+ * 右键目标是否处于「批量语境」。
+ *
+ * 只有右键点在被选中、且选择集不止一项的条目上，菜单才按批量展示与执行；
+ * 点在未选中项上时，即使别处还选着几项，也只看这一项——右键本身不改变选择状态，
+ * 所以不能拿 `selected.size` 单独判断，否则会去操作一批用户根本没指向的文件。
+ */
+function isBatchContext(file: FileItem): boolean {
+  return filesStore.selected.has(file.id) && filesStore.selected.size > 1;
 }
 
+/** 右键弹出的条目（仅用于给卡片加一圈定位高亮，不参与选择状态） */
+const menuTargetId = computed(() => uiStore.contextMenu?.file?.id ?? null);
+
+/** 当前菜单是否为批量语境，交给菜单组件决定展示哪些项 */
+const menuBatch = computed(() => {
+  const target = uiStore.contextMenu?.file;
+  return target ? isBatchContext(target) : false;
+});
+
 /**
- * 右键：先保证被点的这一项处于选中态，再弹菜单。
- * 若它已经在多选集合里就保留整个集合，这样「移动 / 放入回收站」能对一批生效。
+ * 右键：只决定「菜单对准谁」，不改动选择状态。
+ *
+ * 之前这里会把没选中的条目补进选择集，副作用是右键顺带把已有选择清掉了；
+ * 现在选择状态只由圆点单击改变，右键纯粹是打开菜单。
  */
 function openContextMenu(event: MouseEvent, file: FileItem) {
   event.preventDefault();
-  if (!filesStore.selected.has(file.id)) {
-    selectOnly(file);
-  }
   uiStore.showContextMenu(event.clientX, event.clientY, file);
 }
 
 /** 菜单项统一入口：动作需要的目标文件由菜单组件带回来 */
 function onMenuAction(key: string, file: FileItem) {
   uiStore.hideContextMenu();
+
+  const batch = isBatchContext(file);
 
   switch (key) {
     case 'open':
@@ -368,15 +385,16 @@ function onMenuAction(key: string, file: FileItem) {
       openRenameModal(file);
       break;
     case 'move':
-      openMoveModal();
+      // 批量语境移动整批选择集；单项语境只移动右键的那一项
+      openMoveModal(batch ? undefined : file);
       break;
     case 'info':
       infoFile.value = file;
       showInfoModal.value = true;
       break;
     case 'delete':
-      // 多选状态下删的是整批；单选状态沿用原来的单项确认弹窗
-      if (filesStore.selected.size > 1) {
+      // 同上：删整批还是删单项，跟着菜单当时展示的语境走
+      if (batch) {
         showBatchDeleteModal.value = true;
       } else {
         openDeleteModal(file);
@@ -500,8 +518,17 @@ async function loadMoveFolders(folderId: string | null) {
   }
 }
 
-function openMoveModal() {
-  if (filesStore.selected.size === 0) return;
+/**
+ * 打开移动弹窗。
+ *
+ * 不传 `file` 时移动整个选择集（工具栏按钮、多选右键都走这条）；
+ * 传了 `file` 就只移动这一项——右键未选中项时不需要先把它选上。
+ */
+function openMoveModal(file?: FileItem) {
+  const ids = file ? [file.id] : Array.from(filesStore.selected);
+  if (ids.length === 0) return;
+
+  moveIds.value = ids;
   moveTargetId.value = null;
   movePath.value = [];
   showMoveModal.value = true;
@@ -509,7 +536,8 @@ function openMoveModal() {
 }
 
 function enterMoveFolder(folder: FileItem) {
-  if (filesStore.selected.has(folder.id)) return;
+  // 不能把文件夹移动到它自己里面
+  if (moveIds.value.includes(folder.id)) return;
   moveTargetId.value = folder.id;
   loadMoveFolders(folder.id);
 }
@@ -517,7 +545,7 @@ function enterMoveFolder(folder: FileItem) {
 async function confirmMove() {
   batchBusy.value = true;
   try {
-    await filesStore.moveFiles(moveTargetId.value);
+    await filesStore.moveFiles(moveTargetId.value, moveIds.value);
     showMoveModal.value = false;
     uiStore.showToast('Moved successfully', 'success');
     exitSearch();
@@ -609,7 +637,7 @@ async function deleteSelectedFiles() {
         <span class="selection-count">{{ filesStore.selected.size }} selected</span>
         <button class="btn-secondary" @click="filesStore.selectAll()">Select all</button>
         <button class="btn-secondary" @click="filesStore.clearSelection()">Clear</button>
-        <button class="btn-secondary" @click="openMoveModal">Move to…</button>
+        <button class="btn-secondary" @click="openMoveModal()">Move to…</button>
         <button class="btn-danger" @click="showBatchDeleteModal = true">Delete</button>
       </div>
 
@@ -668,7 +696,10 @@ async function deleteSelectedFiles() {
             v-for="file in filesStore.sortedFiles"
             :key="file.id"
             class="file-item"
-            :class="{ selected: filesStore.selected.has(file.id) }"
+            :class="{
+              selected: filesStore.selected.has(file.id),
+              'menu-target': menuTargetId === file.id,
+            }"
             @click="activateItem(file)"
             @contextmenu="openContextMenu($event, file)"
           >
@@ -1012,7 +1043,7 @@ async function deleteSelectedFiles() {
       <Teleport to="body">
         <div v-if="showMoveModal" class="modal-overlay" @click="showMoveModal = false">
           <div class="modal modal-wide" @click.stop>
-            <h3>Move {{ filesStore.selected.size }} item(s)</h3>
+            <h3>Move {{ moveIds.length }} item(s)</h3>
 
             <div class="picker-path">
               <button class="link-btn" @click="moveTargetId = null; loadMoveFolders(null)">My Files</button>
@@ -1085,7 +1116,11 @@ async function deleteSelectedFiles() {
       </Teleport>
 
       <!-- 右键菜单（Teleport 到 body，避免被卡片的 overflow 裁切） -->
-      <ContextMenu :selection-count="filesStore.selected.size" @action="onMenuAction" />
+      <ContextMenu
+        :batch="menuBatch"
+        :selection-count="filesStore.selected.size"
+        @action="onMenuAction"
+      />
     </div>
   </AppLayout>
 </template>
@@ -1315,6 +1350,23 @@ async function deleteSelectedFiles() {
 .file-item.selected {
   background: #dbeafe;
   box-shadow: 0 0 0 2px #3b82f6;
+}
+
+/*
+ * 右键定位框。
+ *
+ * 右键不再改变选择状态，所以未选中的卡片被右键时没有任何视觉反馈，
+ * 菜单「对准的是哪一张」会变得含糊。这里只描一圈浅蓝虚线外框，
+ * 表达「菜单目标」而不表示「已选中」——实心蓝框仍然专属于选择状态。
+ */
+.file-item.menu-target {
+  box-shadow: 0 0 0 2px #93c5fd;
+}
+
+.file-item.selected.menu-target {
+  box-shadow:
+    0 0 0 2px #3b82f6,
+    0 0 0 4px #bfdbfe;
 }
 
 /*
