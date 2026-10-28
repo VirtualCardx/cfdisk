@@ -153,6 +153,44 @@ function openChangePassword() {
   display: none;
 }
 
+/*
+ * 折叠态的页脚要跟着一起收窄。
+ *
+ * 桌面布局是「头像 + 用户名 + 两个图标按钮」横排（头像 36px、间距 12px、按钮约 34px），
+ * 一行下来接近 200px；侧边栏收到 60px 后这行放不下，又没有 overflow 裁剪，
+ * 头像和按钮就溢出到侧边栏之外、压在内容区上。
+ * 折叠时改成纵向堆叠：头像居中，两个图标按钮排在下方。
+ */
+.sidebar.collapsed .sidebar-footer {
+  padding: 0.75rem 0.5rem;
+}
+
+/* 折叠时图标占据全部可用宽度并居中，避免 1rem 的左右内边距把图标顶偏 */
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.sidebar.collapsed .user-info {
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.sidebar.collapsed .user-avatar {
+  width: 32px;
+  height: 32px;
+  font-size: 0.8125rem;
+}
+
+.sidebar.collapsed .logout-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.375rem 0;
+}
+
 .sidebar-header {
   display: flex;
   align-items: center;
