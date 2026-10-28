@@ -3,6 +3,7 @@ import { ref, reactive, computed, watch, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AppLayout from '@/components/layout/AppLayout.vue';
 import FileThumb from '@/components/files/FileThumb.vue';
+import ContextMenu from '@/components/drive/ContextMenu.vue';
 import { useFilesStore, type FileItem, type PathItem } from '@/stores/files';
 import { useUploadStore, type UploadTask } from '@/stores/upload';
 import { useUIStore } from '@/stores/ui';
@@ -33,6 +34,8 @@ const createdShareUrl = ref('');
 // 批量操作
 const showMoveModal = ref(false);
 const showBatchDeleteModal = ref(false);
+const showInfoModal = ref(false);
+const infoFile = ref<FileItem | null>(null);
 const batchBusy = ref(false);
 const moveTargetId = ref<string | null>(null);
 const moveFolders = ref<FileItem[]>([]);
@@ -322,10 +325,90 @@ async function downloadFile(file: FileItem) {
   }
 }
 
-function handleContextMenu(event: MouseEvent, file: FileItem) {
+// ---------- 单击 / 右键 / 多选 ----------
+
+/** 单击卡片：文件夹进入下一层，文件直接打开预览 */
+function activateItem(file: FileItem) {
+  openFolder(file);
+}
+
+/** 把选择重置为仅这一项（右键操作、单项弹窗前调用） */
+function selectOnly(file: FileItem) {
+  filesStore.clearSelection();
+  filesStore.selected.add(file.id);
+}
+
+/**
+ * 右键：先保证被点的这一项处于选中态，再弹菜单。
+ * 若它已经在多选集合里就保留整个集合，这样「移动 / 放入回收站」能对一批生效。
+ */
+function openContextMenu(event: MouseEvent, file: FileItem) {
   event.preventDefault();
+  if (!filesStore.selected.has(file.id)) {
+    selectOnly(file);
+  }
   uiStore.showContextMenu(event.clientX, event.clientY, file);
 }
+
+/** 菜单项统一入口：动作需要的目标文件由菜单组件带回来 */
+function onMenuAction(key: string, file: FileItem) {
+  uiStore.hideContextMenu();
+
+  switch (key) {
+    case 'open':
+      activateItem(file);
+      break;
+    case 'share':
+      openShareModal(file);
+      break;
+    case 'download':
+      void downloadFile(file);
+      break;
+    case 'rename':
+      openRenameModal(file);
+      break;
+    case 'move':
+      openMoveModal();
+      break;
+    case 'info':
+      infoFile.value = file;
+      showInfoModal.value = true;
+      break;
+    case 'delete':
+      // 多选状态下删的是整批；单选状态沿用原来的单项确认弹窗
+      if (filesStore.selected.size > 1) {
+        showBatchDeleteModal.value = true;
+      } else {
+        openDeleteModal(file);
+      }
+      break;
+  }
+}
+
+function formatDateTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+const infoTypeLabel = computed(() => {
+  const file = infoFile.value;
+  if (!file) return '';
+  if (file.type === 'folder') return 'Folder';
+  return file.mime_type || 'File';
+});
+
+const infoSizeText = computed(() => {
+  const file = infoFile.value;
+  if (!file) return '';
+  return file.type === 'folder' ? '—' : formatBytes(file.size);
+});
+
+const infoLocation = computed(() => filesStore.breadcrumbs.map((item) => item.name).join(' / '));
 
 // ---------- 搜索 ----------
 
@@ -580,16 +663,39 @@ async function deleteSelectedFiles() {
           <p class="hint">Drop files here or click Upload</p>
         </div>
 
-        <div v-else class="file-grid">
+        <div v-else class="file-grid" @click.self="filesStore.clearSelection()">
           <div
             v-for="file in filesStore.sortedFiles"
             :key="file.id"
             class="file-item"
             :class="{ selected: filesStore.selected.has(file.id) }"
-            @click="filesStore.toggleSelect(file.id)"
-            @dblclick="openFolder(file)"
-            @contextmenu="handleContextMenu($event, file)"
+            @click="activateItem(file)"
+            @contextmenu="openContextMenu($event, file)"
           >
+            <!-- 多选圆点：hover / 已选中时可见；空心=未选，实心带勾=已选 -->
+            <button
+              type="button"
+              class="select-dot"
+              :class="{ checked: filesStore.selected.has(file.id) }"
+              :aria-pressed="filesStore.selected.has(file.id)"
+              :title="filesStore.selected.has(file.id) ? 'Deselect' : 'Select'"
+              @click.stop="filesStore.toggleSelect(file.id)"
+            >
+              <svg
+                v-if="filesStore.selected.has(file.id)"
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="3.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </button>
             <div class="file-icon" :class="getFileIcon(file)">
               <!-- 图片：优先显示真实缩略图，加载失败或大图回退为图标 -->
               <FileThumb v-if="getFileIcon(file) === 'image'" :file="file">
@@ -673,12 +779,7 @@ async function deleteSelectedFiles() {
               <span>{{ formatDate(file.updated_at) }}</span>
             </div>
             <div class="file-actions">
-              <button @click.stop="openPreview(file)" title="Preview" v-if="file.type === 'file'">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                  <circle cx="12" cy="12" r="3"/>
-                </svg>
-              </button>
+              <!-- 预览按钮已移除：单击卡片本身就会打开预览，这里保留的是不常用的次要动作 -->
               <button
                 data-action="download"
                 @click.stop="downloadFile(file)"
@@ -963,6 +1064,28 @@ async function deleteSelectedFiles() {
           </div>
         </div>
       </Teleport>
+
+      <!-- Item Details Modal -->
+      <Teleport to="body">
+        <div v-if="showInfoModal" class="modal-overlay" @click="showInfoModal = false">
+          <div class="modal" @click.stop>
+            <h3>{{ infoFile?.name }}</h3>
+            <dl class="info-list">
+              <div><dt>Type</dt><dd>{{ infoTypeLabel }}</dd></div>
+              <div><dt>Size</dt><dd>{{ infoSizeText }}</dd></div>
+              <div><dt>Location</dt><dd>{{ infoLocation }}</dd></div>
+              <div><dt>Modified</dt><dd>{{ infoFile ? formatDateTime(infoFile.updated_at) : '' }}</dd></div>
+              <div><dt>Created</dt><dd>{{ infoFile ? formatDateTime(infoFile.created_at) : '' }}</dd></div>
+            </dl>
+            <div class="modal-actions">
+              <button class="btn-secondary" @click="showInfoModal = false">Close</button>
+            </div>
+          </div>
+        </div>
+      </Teleport>
+
+      <!-- 右键菜单（Teleport 到 body，避免被卡片的 overflow 裁切） -->
+      <ContextMenu :selection-count="filesStore.selected.size" @action="onMenuAction" />
     </div>
   </AppLayout>
 </template>
@@ -1192,6 +1315,69 @@ async function deleteSelectedFiles() {
 .file-item.selected {
   background: #dbeafe;
   box-shadow: 0 0 0 2px #3b82f6;
+}
+
+/*
+ * 多选圆点。
+ *
+ * 单击卡片现在是「打开」，多选只能从这里进，所以它的可发现性很重要：
+ * 平时透明，鼠标悬浮卡片时浮现成空心圈（暗示「这里可以点」），
+ * 选中后变实心蓝底 + 白勾并常驻。
+ *
+ * z-index 需要高于缩略图（.thumb-img 无 z-index）和右上角操作按钮（2），
+ * 否则圆点会被盖住、点不到。
+ */
+.select-dot {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: #ffffff;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.85);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.file-item:hover .select-dot,
+.select-dot.checked,
+.select-dot:focus-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.select-dot:hover {
+  border-color: #2563eb;
+}
+
+.select-dot.checked {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.select-dot.checked:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+/* 触屏没有 hover，圆点必须常显，否则根本没入口进多选 */
+@media (hover: none) {
+  .select-dot {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .file-icon {
@@ -1674,6 +1860,32 @@ async function deleteSelectedFiles() {
 
 .form-group {
   margin-bottom: 1rem;
+}
+
+/* 「查看详细信息」的键值列表 */
+.info-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0 0 1.25rem;
+}
+
+.info-list > div {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.info-list dt {
+  font-size: 0.8125rem;
+  color: #64748b;
+}
+
+.info-list dd {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: #0f172a;
+  word-break: break-word;
 }
 
 .form-group label {
