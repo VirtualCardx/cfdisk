@@ -54,6 +54,8 @@ const chromeHidden = ref(false);
  * 调一次 reset()，若 const 在下面才初始化就会撞上 TDZ。
  */
 const imgReady = ref(false);
+/** 舞台尺寸变化导致的重排：这一帧内关掉过渡，直接跳到新尺寸 */
+const resizing = ref(false);
 let dragStart = { x: 0, y: 0, ox: 0, oy: 0 };
 
 // 多指手势：pointerId -> 坐标
@@ -148,6 +150,7 @@ function resetViewer() {
   dragging.value = false;
   pinching.value = false;
   imgReady.value = false;
+  resizing.value = false;
   pointers.clear();
   pinchStart = null;
 }
@@ -209,24 +212,70 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function computeFitScale(): number {
+/**
+ * 计算「适应窗口」的缩放比。
+ *
+ * 返回 null 表示**现在还算不出来**（舞台还没布局完 / 尺寸还没拿到），
+ * 和「算出来就是 1」是两件完全不同的事：移动端首帧常能读到 0×0 的舞台，
+ * 若此时把 1 当成结论，图片就会停在原始像素尺寸——2200px 的图在 390px 屏幕上
+ * 只露出一小块，而且除非用户手动缩放，否则再也不会被纠正。
+ */
+function computeFitScale(): number | null {
   const stage = stageRef.value;
   const { w, h } = naturalSize.value;
-  if (!stage || !w || !h) return 1;
+  if (!stage || !w || !h) return null;
 
   const pad = 48;
-  const cw = Math.max(stage.clientWidth - pad, 1);
-  const ch = Math.max(stage.clientHeight - pad, 1);
+  const cw = stage.clientWidth - pad;
+  const ch = stage.clientHeight - pad;
+  // 舞台还没真正排布出来（或小到放不下）时不给出结论，交给后续重试
+  if (cw < 64 || ch < 64) return null;
+
   return clamp(Math.min(cw / w, ch / h), 0.02, 1);
 }
 
 let fittedScale = 1;
 
+/** 用户主动「适应窗口」：算不出来时退回 1，至少别让画面消失 */
 function fitToWindow() {
-  scale.value = computeFitScale();
+  const fit = computeFitScale();
+  scale.value = fit ?? 1;
   fittedScale = scale.value;
   offset.value = { x: 0, y: 0 };
   rotation.value = 0;
+}
+
+/**
+ * 首次定位：图片刚加载完时调用。
+ *
+ * 成功把「适应窗口」写进 scale 后，等一帧再放行可见性（见 onImageLoad 的说明）；
+ * 失败则说明舞台尺寸还不可用，返回 false 让调用方安排重试。
+ */
+function applyInitialFit(): boolean {
+  const fit = computeFitScale();
+  if (fit === null) return false;
+
+  scale.value = fit;
+  fittedScale = fit;
+  offset.value = { x: 0, y: 0 };
+  rotation.value = 0;
+  return true;
+}
+
+/** 舞台尺寸还没准备好时的短暂重试（移动端首帧、旋转屏幕、URL 栏收放都会短暂读不到尺寸） */
+function retryInitialFit(remaining: number): void {
+  if (remaining <= 0 || imgReady.value) return;
+
+  requestAnimationFrame(() => {
+    if (imgReady.value) return;
+    if (applyInitialFit()) {
+      requestAnimationFrame(() => {
+        imgReady.value = true;
+      });
+      return;
+    }
+    retryInitialFit(remaining - 1);
+  });
 }
 
 function actualSize() {
@@ -271,7 +320,13 @@ function clampOffset() {
 function onImageLoad(event: Event) {
   const img = event.target as HTMLImageElement;
   naturalSize.value = { w: img.naturalWidth, h: img.naturalHeight };
-  fitToWindow();
+
+  if (!applyInitialFit()) {
+    // 舞台暂时量不到尺寸（移动端打开瞬间、刚旋转屏幕）：
+    // 先不显示，短帧重试；重试也会被 ResizeObserver 兜住
+    retryInitialFit(8);
+    return;
+  }
 
   // 等浏览器把「已按适应尺寸定位」的那一帧画出来，再开启可见性与过渡，
   // 否则改动 scale 的同一帧里打开 transition，仍会看到一段缩放动画
@@ -291,7 +346,9 @@ function onWheel(event: WheelEvent) {
 
 // 当前是否处于「放大 / 旋转」状态（用于判断能否横向滑动切图）
 function isZoomed(): boolean {
-  return scale.value > computeFitScale() * 1.02 || rotation.value % 360 !== 0;
+  if (rotation.value % 360 !== 0) return true;
+  const fit = computeFitScale();
+  return fit !== null && scale.value > fit * 1.02;
 }
 
 // 双击 / 双击（移动端）：在「适应窗口」与「1:1」之间切换
@@ -441,7 +498,7 @@ function onPointerUp(event: PointerEvent) {
   // 双指缩放结束后：缩得太小则回弹到适应窗口，否则把画面收进可视区域
   if (pinchHappened) {
     const fit = computeFitScale();
-    if (scale.value < fit * 0.98) {
+    if (fit !== null && scale.value < fit * 0.98) {
       scale.value = fit;
       fittedScale = fit;
       offset.value = { x: 0, y: 0 };
@@ -614,22 +671,73 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
-function onResize() {
+/**
+ * 舞台尺寸变化后的统一收敛逻辑（窗口 resize、移动端 URL 栏收放、屏幕旋转、
+ * 首次布局完成都会走到这里）。
+ *
+ * 分两种情况：
+ * 1. 首次定位还没完成 —— 补做定位，成功后才放行可见性。移动端打开瞬间舞台
+ *    可能还是 0×0，此时绝不能把 1（原始像素）当成最终结果；
+ * 2. 已经完成定位 —— 用户没手动缩放过就跟随新尺寸重新适配。
+ */
+function syncFitToStage() {
   if (kind.value !== 'image' || !naturalSize.value.w) return;
-  // 用户没有手动缩放时，跟随窗口重新适配
-  if (Math.abs(scale.value - fittedScale) < 0.001) fitToWindow();
+
+  if (!imgReady.value) {
+    if (!applyInitialFit()) return;
+    requestAnimationFrame(() => {
+      imgReady.value = true;
+    });
+    return;
+  }
+
+  if (Math.abs(scale.value - fittedScale) < 0.001) {
+    // 舞台尺寸变化（旋转屏幕、地址栏收放）引起的适配直接跳变：
+    // 走 0.12s 过渡的话，中间几十毫秒画面会比新舞台还大，看起来像闪了一下
+    resizing.value = true;
+    fitToWindow();
+    requestAnimationFrame(() => {
+      resizing.value = false;
+    });
+  }
 }
+
+function onResize() {
+  syncFitToStage();
+}
+
+// 舞台尺寸不只受 window.resize 影响（移动端地址栏收放时 visualViewport 先变），
+// 直接观察元素本身最稳，也能兜住「首帧尺寸为 0，稍后才排布出来」的情况。
+let stageObserver: ResizeObserver | null = null;
+
+function observeStage() {
+  stageObserver?.disconnect();
+  stageObserver = null;
+
+  const stage = stageRef.value;
+  if (!stage || typeof ResizeObserver === 'undefined') return;
+
+  stageObserver = new ResizeObserver(() => syncFitToStage());
+  stageObserver.observe(stage);
+}
+
+watch(stageRef, () => observeStage());
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown);
   window.addEventListener('resize', onResize);
   document.addEventListener('fullscreenchange', syncFullscreenState);
+  window.visualViewport?.addEventListener('resize', onResize);
+  observeStage();
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown);
   window.removeEventListener('resize', onResize);
   document.removeEventListener('fullscreenchange', syncFullscreenState);
+  window.visualViewport?.removeEventListener('resize', onResize);
+  stageObserver?.disconnect();
+  stageObserver = null;
   window.clearTimeout(tapTimer);
   lockBodyScroll(false);
 });
@@ -695,7 +803,7 @@ onBeforeUnmount(() => {
             <div
               ref="stageRef"
               class="image-stage"
-              :class="{ dragging, pinching }"
+              :class="{ dragging, pinching, resizing }"
               @wheel.prevent="onWheel"
               @pointerdown="onPointerDown"
               @pointermove="onPointerMove"
@@ -1061,10 +1169,17 @@ onBeforeUnmount(() => {
 
 /* ---------- 图片查看器 ---------- */
 
+/*
+ * 用绝对定位铺满 .preview-body，而不是 height: 100%。
+ *
+ * 移动端（尤其 iOS）里父级高度来自 flex: 1 时并不总是「确定高度」，
+ * 此时 height: 100% 会退回 auto，舞台高度就跟着图片原始高度走，
+ * 于是 computeFitScale 读到的是一个巨大的舞台高度 —— 缩放比例失真。
+ * inset: 0 让舞台尺寸完全由容器决定，和图片自身尺寸解耦。
+ */
 .image-stage {
-  position: relative;
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1147,7 +1262,8 @@ onBeforeUnmount(() => {
 }
 
 .image-stage.dragging .viewer-image,
-.image-stage.pinching .viewer-image {
+.image-stage.pinching .viewer-image,
+.image-stage.resizing .viewer-image {
   transition: none;
 }
 
