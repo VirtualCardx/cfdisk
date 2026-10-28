@@ -42,6 +42,18 @@ const dragging = ref(false);
 const pinching = ref(false);
 const isFullscreen = ref(false);
 const chromeHidden = ref(false);
+/**
+ * 图片是否已完成「首次定位」。
+ *
+ * 在 `load` 触发前 `scale` 还是 1，也就是按原始像素渲染——4000px 的图会先铺一帧
+ * 溢出的巨大画面，等事件回调里 fitToWindow() 才缩到适应窗口，中间那段过渡
+ * 看起来就是「先显示原图、再跳一下」。所以这张图在完成首次适配前保持透明，
+ * 适配值提交到一帧之后再淡入，用户只会看到一次干净的淡入。
+ *
+ * 声明位置必须在文件末尾那个 immediate watcher 之前：它会在 setup 阶段同步
+ * 调一次 reset()，若 const 在下面才初始化就会撞上 TDZ。
+ */
+const imgReady = ref(false);
 let dragStart = { x: 0, y: 0, ox: 0, oy: 0 };
 
 // 多指手势：pointerId -> 坐标
@@ -135,6 +147,7 @@ function resetViewer() {
   offset.value = { x: 0, y: 0 };
   dragging.value = false;
   pinching.value = false;
+  imgReady.value = false;
   pointers.clear();
   pinchStart = null;
 }
@@ -217,11 +230,14 @@ function fitToWindow() {
 }
 
 function actualSize() {
+  // 尺寸还没拿到时按 1:1 显示只会露出原图的左上角，等价于什么都没做
+  if (!naturalSize.value.w) return;
   scale.value = 1;
   offset.value = { x: 0, y: 0 };
 }
 
 function zoomBy(factor: number) {
+  if (!naturalSize.value.w) return;
   scale.value = clamp(scale.value * factor, 0.02, 12);
   clampOffset();
 }
@@ -249,10 +265,24 @@ function clampOffset() {
   };
 }
 
+/**
+ * 图片加载完成：拿到真实尺寸、按窗口算好适配比例，再放行可见性。
+ */
 function onImageLoad(event: Event) {
   const img = event.target as HTMLImageElement;
   naturalSize.value = { w: img.naturalWidth, h: img.naturalHeight };
   fitToWindow();
+
+  // 等浏览器把「已按适应尺寸定位」的那一帧画出来，再开启可见性与过渡，
+  // 否则改动 scale 的同一帧里打开 transition，仍会看到一段缩放动画
+  requestAnimationFrame(() => {
+    imgReady.value = true;
+  });
+}
+
+function onImageError() {
+  imgReady.value = true;
+  error.value = 'Failed to load image';
 }
 
 function onWheel(event: WheelEvent) {
@@ -677,12 +707,20 @@ onBeforeUnmount(() => {
                 :src="src"
                 :alt="file.name"
                 class="viewer-image"
+                :class="{ 'is-ready': imgReady }"
                 :style="{
                   transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale}) rotate(${rotation}deg)`,
                 }"
+                decoding="async"
                 draggable="false"
                 @load="onImageLoad"
+                @error="onImageError"
               />
+
+              <!-- 首帧定位完成前的等待指示：绝对定位，不参与 flex 布局，避免挤动图片 -->
+              <div v-if="!imgReady" class="image-pending" aria-hidden="true">
+                <span class="pending-ring"></span>
+              </div>
             </div>
 
             <div class="image-toolbar" @click.stop>
@@ -706,7 +744,7 @@ onBeforeUnmount(() => {
               </button>
 
               <button class="zoom-label" title="Fit to window (0)" @click="fitToWindow">
-                {{ scalePercent }}%
+                {{ imgReady ? `${scalePercent}%` : '—' }}
               </button>
 
               <button class="tool-btn" title="Zoom in (+)" @click="zoomBy(1.1)">
@@ -1024,6 +1062,7 @@ onBeforeUnmount(() => {
 /* ---------- 图片查看器 ---------- */
 
 .image-stage {
+  position: relative;
   width: 100%;
   height: 100%;
   display: flex;
@@ -1038,6 +1077,14 @@ onBeforeUnmount(() => {
   cursor: grabbing;
 }
 
+/*
+ * 首帧不参与过渡。
+ *
+ * 图片挂载时 scale 还是 1（原始像素），要等 load 回调才算出适应比例。
+ * 如果此时 already 带 transition，浏览器会把「原图 → 适应尺寸」这段变化
+ * 做成一段缩放动画，就是用户看到的「先显示原图再跳一下」。
+ * 所以：定位完成前 opacity: 0 且 transition: none，`is-ready` 之后再统一开过渡。
+ */
 .viewer-image {
   max-width: none;
   max-height: none;
@@ -1046,7 +1093,57 @@ onBeforeUnmount(() => {
   user-select: none;
   -webkit-user-drag: none;
   -webkit-touch-callout: none;
-  transition: transform 0.12s ease-out;
+  opacity: 0;
+  transition: none;
+}
+
+.viewer-image.is-ready {
+  opacity: 1;
+  transition:
+    transform 0.12s ease-out,
+    opacity 0.16s ease;
+}
+
+/* 等待指示：只占一层薄薄的呼吸光点，避免大图解码时露出纯黑舞台 */
+.image-pending {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  /* 延迟 300ms 才浮现：小图/缓存命中时几乎瞬间就好，不该闪一下转圈 */
+  animation: pending-in 0.18s ease 0.3s both;
+}
+
+@keyframes pending-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.pending-ring {
+  width: 26px;
+  height: 26px;
+  border: 2px solid rgba(148, 163, 184, 0.28);
+  border-top-color: rgba(148, 163, 184, 0.85);
+  border-radius: 50%;
+  animation: pending-spin 0.8s linear infinite;
+}
+
+@keyframes pending-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pending-ring {
+    animation: none;
+    border-top-color: rgba(148, 163, 184, 0.5);
+  }
 }
 
 .image-stage.dragging .viewer-image,
