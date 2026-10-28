@@ -74,13 +74,20 @@ function openChangePassword() {
         <span>Admin</span>
       </router-link>
 
-      <!-- 移动端底栏没有侧边栏页脚，单独给一个账号入口 -->
+      <!-- 移动端底栏没有侧边栏页脚，把「改密码 / 退出」单独放出来，功能与桌面端对齐 -->
       <button class="nav-item mobile-only" @click="openChangePassword">
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="4" y="11" width="16" height="10" rx="2"/>
           <path d="M8 11V7a4 4 0 118 0v4"/>
         </svg>
         <span>Account</span>
+      </button>
+
+      <button class="nav-item mobile-only" @click="handleLogout">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>
+        </svg>
+        <span>Logout</span>
       </button>
     </nav>
 
@@ -320,6 +327,7 @@ button.nav-item {
     bottom: 0;
     left: 0;
     border-top: 1px solid #1e3a8a;
+    padding-bottom: env(safe-area-inset-bottom, 0);
   }
 
   .sidebar.collapsed {
@@ -333,19 +341,38 @@ button.nav-item {
   .sidebar-nav {
     flex-direction: row;
     justify-content: space-around;
-    padding: 0.5rem;
+    align-items: stretch;
+    gap: 0;
+    padding: 0.25rem;
     flex: 1;
   }
 
+  /*
+   * 每个入口平分宽度。
+   *
+   * 之前 `button.nav-item` 带着桌面端的 `width: 100%`，在横排 flex 里会吃掉全部剩余空间：
+   * 前面几个链接被压成 36px 挤在左边，最后一个按钮又把图标居中顶到最右，
+   * 看起来就是「中间空一大块、按钮没排开」。
+   * 用 `flex: 1 1 0` + `width: auto` 让每个入口等宽，图标才会均匀分布。
+   */
   .nav-item {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
     flex-direction: column;
-    padding: 0.25rem 0.5rem;
+    justify-content: center;
+    align-items: center;
+    padding: 0.375rem 0.25rem;
     gap: 0.25rem;
     font-size: 0.7rem;
   }
 
   .nav-item span {
     font-size: 0.65rem;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .nav-item.mobile-only {

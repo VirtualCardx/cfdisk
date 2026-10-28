@@ -45,7 +45,8 @@ const uiStore = useUIStore();
 @media (max-width: 768px) {
   .main-content {
     margin-left: 0;
-    padding-bottom: 70px; /* 为底部导航栏留出空间 */
+    /* 底部导航 60px + 呼吸空间，外加 iPhone 类机型的 home indicator 安全区 */
+    padding-bottom: calc(70px + env(safe-area-inset-bottom, 0px));
   }
 
   .main-content.expanded {
