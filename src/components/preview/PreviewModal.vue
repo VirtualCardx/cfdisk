@@ -42,20 +42,6 @@ const dragging = ref(false);
 const pinching = ref(false);
 const isFullscreen = ref(false);
 const chromeHidden = ref(false);
-/**
- * 图片是否已完成「首次定位」。
- *
- * 在 `load` 触发前 `scale` 还是 1，也就是按原始像素渲染——4000px 的图会先铺一帧
- * 溢出的巨大画面，等事件回调里 fitToWindow() 才缩到适应窗口，中间那段过渡
- * 看起来就是「先显示原图、再跳一下」。所以这张图在完成首次适配前保持透明，
- * 适配值提交到一帧之后再淡入，用户只会看到一次干净的淡入。
- *
- * 声明位置必须在文件末尾那个 immediate watcher 之前：它会在 setup 阶段同步
- * 调一次 reset()，若 const 在下面才初始化就会撞上 TDZ。
- */
-const imgReady = ref(false);
-/** 舞台尺寸变化导致的重排：这一帧内关掉过渡，直接跳到新尺寸 */
-const resizing = ref(false);
 let dragStart = { x: 0, y: 0, ox: 0, oy: 0 };
 
 // 多指手势：pointerId -> 坐标
@@ -149,8 +135,6 @@ function resetViewer() {
   offset.value = { x: 0, y: 0 };
   dragging.value = false;
   pinching.value = false;
-  imgReady.value = false;
-  resizing.value = false;
   pointers.clear();
   pinchStart = null;
 }
@@ -212,81 +196,32 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-/**
- * 计算「适应窗口」的缩放比。
- *
- * 返回 null 表示**现在还算不出来**（舞台还没布局完 / 尺寸还没拿到），
- * 和「算出来就是 1」是两件完全不同的事：移动端首帧常能读到 0×0 的舞台，
- * 若此时把 1 当成结论，图片就会停在原始像素尺寸——2200px 的图在 390px 屏幕上
- * 只露出一小块，而且除非用户手动缩放，否则再也不会被纠正。
- */
-function computeFitScale(): number | null {
+function computeFitScale(): number {
   const stage = stageRef.value;
   const { w, h } = naturalSize.value;
-  if (!stage || !w || !h) return null;
+  if (!stage || !w || !h) return 1;
 
   const pad = 48;
-  const cw = stage.clientWidth - pad;
-  const ch = stage.clientHeight - pad;
-  // 舞台还没真正排布出来（或小到放不下）时不给出结论，交给后续重试
-  if (cw < 64 || ch < 64) return null;
-
+  const cw = Math.max(stage.clientWidth - pad, 1);
+  const ch = Math.max(stage.clientHeight - pad, 1);
   return clamp(Math.min(cw / w, ch / h), 0.02, 1);
 }
 
 let fittedScale = 1;
 
-/** 用户主动「适应窗口」：算不出来时退回 1，至少别让画面消失 */
 function fitToWindow() {
-  const fit = computeFitScale();
-  scale.value = fit ?? 1;
+  scale.value = computeFitScale();
   fittedScale = scale.value;
   offset.value = { x: 0, y: 0 };
   rotation.value = 0;
 }
 
-/**
- * 首次定位：图片刚加载完时调用。
- *
- * 成功把「适应窗口」写进 scale 后，等一帧再放行可见性（见 onImageLoad 的说明）；
- * 失败则说明舞台尺寸还不可用，返回 false 让调用方安排重试。
- */
-function applyInitialFit(): boolean {
-  const fit = computeFitScale();
-  if (fit === null) return false;
-
-  scale.value = fit;
-  fittedScale = fit;
-  offset.value = { x: 0, y: 0 };
-  rotation.value = 0;
-  return true;
-}
-
-/** 舞台尺寸还没准备好时的短暂重试（移动端首帧、旋转屏幕、URL 栏收放都会短暂读不到尺寸） */
-function retryInitialFit(remaining: number): void {
-  if (remaining <= 0 || imgReady.value) return;
-
-  requestAnimationFrame(() => {
-    if (imgReady.value) return;
-    if (applyInitialFit()) {
-      requestAnimationFrame(() => {
-        imgReady.value = true;
-      });
-      return;
-    }
-    retryInitialFit(remaining - 1);
-  });
-}
-
 function actualSize() {
-  // 尺寸还没拿到时按 1:1 显示只会露出原图的左上角，等价于什么都没做
-  if (!naturalSize.value.w) return;
   scale.value = 1;
   offset.value = { x: 0, y: 0 };
 }
 
 function zoomBy(factor: number) {
-  if (!naturalSize.value.w) return;
   scale.value = clamp(scale.value * factor, 0.02, 12);
   clampOffset();
 }
@@ -314,30 +249,10 @@ function clampOffset() {
   };
 }
 
-/**
- * 图片加载完成：拿到真实尺寸、按窗口算好适配比例，再放行可见性。
- */
 function onImageLoad(event: Event) {
   const img = event.target as HTMLImageElement;
   naturalSize.value = { w: img.naturalWidth, h: img.naturalHeight };
-
-  if (!applyInitialFit()) {
-    // 舞台暂时量不到尺寸（移动端打开瞬间、刚旋转屏幕）：
-    // 先不显示，短帧重试；重试也会被 ResizeObserver 兜住
-    retryInitialFit(8);
-    return;
-  }
-
-  // 等浏览器把「已按适应尺寸定位」的那一帧画出来，再开启可见性与过渡，
-  // 否则改动 scale 的同一帧里打开 transition，仍会看到一段缩放动画
-  requestAnimationFrame(() => {
-    imgReady.value = true;
-  });
-}
-
-function onImageError() {
-  imgReady.value = true;
-  error.value = 'Failed to load image';
+  fitToWindow();
 }
 
 function onWheel(event: WheelEvent) {
@@ -346,9 +261,7 @@ function onWheel(event: WheelEvent) {
 
 // 当前是否处于「放大 / 旋转」状态（用于判断能否横向滑动切图）
 function isZoomed(): boolean {
-  if (rotation.value % 360 !== 0) return true;
-  const fit = computeFitScale();
-  return fit !== null && scale.value > fit * 1.02;
+  return scale.value > computeFitScale() * 1.02 || rotation.value % 360 !== 0;
 }
 
 // 双击 / 双击（移动端）：在「适应窗口」与「1:1」之间切换
@@ -498,7 +411,7 @@ function onPointerUp(event: PointerEvent) {
   // 双指缩放结束后：缩得太小则回弹到适应窗口，否则把画面收进可视区域
   if (pinchHappened) {
     const fit = computeFitScale();
-    if (fit !== null && scale.value < fit * 0.98) {
+    if (scale.value < fit * 0.98) {
       scale.value = fit;
       fittedScale = fit;
       offset.value = { x: 0, y: 0 };
@@ -671,73 +584,22 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
-/**
- * 舞台尺寸变化后的统一收敛逻辑（窗口 resize、移动端 URL 栏收放、屏幕旋转、
- * 首次布局完成都会走到这里）。
- *
- * 分两种情况：
- * 1. 首次定位还没完成 —— 补做定位，成功后才放行可见性。移动端打开瞬间舞台
- *    可能还是 0×0，此时绝不能把 1（原始像素）当成最终结果；
- * 2. 已经完成定位 —— 用户没手动缩放过就跟随新尺寸重新适配。
- */
-function syncFitToStage() {
-  if (kind.value !== 'image' || !naturalSize.value.w) return;
-
-  if (!imgReady.value) {
-    if (!applyInitialFit()) return;
-    requestAnimationFrame(() => {
-      imgReady.value = true;
-    });
-    return;
-  }
-
-  if (Math.abs(scale.value - fittedScale) < 0.001) {
-    // 舞台尺寸变化（旋转屏幕、地址栏收放）引起的适配直接跳变：
-    // 走 0.12s 过渡的话，中间几十毫秒画面会比新舞台还大，看起来像闪了一下
-    resizing.value = true;
-    fitToWindow();
-    requestAnimationFrame(() => {
-      resizing.value = false;
-    });
-  }
-}
-
 function onResize() {
-  syncFitToStage();
+  if (kind.value !== 'image' || !naturalSize.value.w) return;
+  // 用户没有手动缩放时，跟随窗口重新适配
+  if (Math.abs(scale.value - fittedScale) < 0.001) fitToWindow();
 }
-
-// 舞台尺寸不只受 window.resize 影响（移动端地址栏收放时 visualViewport 先变），
-// 直接观察元素本身最稳，也能兜住「首帧尺寸为 0，稍后才排布出来」的情况。
-let stageObserver: ResizeObserver | null = null;
-
-function observeStage() {
-  stageObserver?.disconnect();
-  stageObserver = null;
-
-  const stage = stageRef.value;
-  if (!stage || typeof ResizeObserver === 'undefined') return;
-
-  stageObserver = new ResizeObserver(() => syncFitToStage());
-  stageObserver.observe(stage);
-}
-
-watch(stageRef, () => observeStage());
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown);
   window.addEventListener('resize', onResize);
   document.addEventListener('fullscreenchange', syncFullscreenState);
-  window.visualViewport?.addEventListener('resize', onResize);
-  observeStage();
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown);
   window.removeEventListener('resize', onResize);
   document.removeEventListener('fullscreenchange', syncFullscreenState);
-  window.visualViewport?.removeEventListener('resize', onResize);
-  stageObserver?.disconnect();
-  stageObserver = null;
   window.clearTimeout(tapTimer);
   lockBodyScroll(false);
 });
@@ -803,7 +665,7 @@ onBeforeUnmount(() => {
             <div
               ref="stageRef"
               class="image-stage"
-              :class="{ dragging, pinching, resizing }"
+              :class="{ dragging, pinching }"
               @wheel.prevent="onWheel"
               @pointerdown="onPointerDown"
               @pointermove="onPointerMove"
@@ -815,20 +677,12 @@ onBeforeUnmount(() => {
                 :src="src"
                 :alt="file.name"
                 class="viewer-image"
-                :class="{ 'is-ready': imgReady }"
                 :style="{
                   transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale}) rotate(${rotation}deg)`,
                 }"
-                decoding="async"
                 draggable="false"
                 @load="onImageLoad"
-                @error="onImageError"
               />
-
-              <!-- 首帧定位完成前的等待指示：绝对定位，不参与 flex 布局，避免挤动图片 -->
-              <div v-if="!imgReady" class="image-pending" aria-hidden="true">
-                <span class="pending-ring"></span>
-              </div>
             </div>
 
             <div class="image-toolbar" @click.stop>
@@ -852,7 +706,7 @@ onBeforeUnmount(() => {
               </button>
 
               <button class="zoom-label" title="Fit to window (0)" @click="fitToWindow">
-                {{ imgReady ? `${scalePercent}%` : '—' }}
+                {{ scalePercent }}%
               </button>
 
               <button class="tool-btn" title="Zoom in (+)" @click="zoomBy(1.1)">
@@ -1169,17 +1023,9 @@ onBeforeUnmount(() => {
 
 /* ---------- 图片查看器 ---------- */
 
-/*
- * 用绝对定位铺满 .preview-body，而不是 height: 100%。
- *
- * 移动端（尤其 iOS）里父级高度来自 flex: 1 时并不总是「确定高度」，
- * 此时 height: 100% 会退回 auto，舞台高度就跟着图片原始高度走，
- * 于是 computeFitScale 读到的是一个巨大的舞台高度 —— 缩放比例失真。
- * inset: 0 让舞台尺寸完全由容器决定，和图片自身尺寸解耦。
- */
 .image-stage {
-  position: absolute;
-  inset: 0;
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1192,14 +1038,6 @@ onBeforeUnmount(() => {
   cursor: grabbing;
 }
 
-/*
- * 首帧不参与过渡。
- *
- * 图片挂载时 scale 还是 1（原始像素），要等 load 回调才算出适应比例。
- * 如果此时 already 带 transition，浏览器会把「原图 → 适应尺寸」这段变化
- * 做成一段缩放动画，就是用户看到的「先显示原图再跳一下」。
- * 所以：定位完成前 opacity: 0 且 transition: none，`is-ready` 之后再统一开过渡。
- */
 .viewer-image {
   max-width: none;
   max-height: none;
@@ -1208,62 +1046,11 @@ onBeforeUnmount(() => {
   user-select: none;
   -webkit-user-drag: none;
   -webkit-touch-callout: none;
-  opacity: 0;
-  transition: none;
-}
-
-.viewer-image.is-ready {
-  opacity: 1;
-  transition:
-    transform 0.12s ease-out,
-    opacity 0.16s ease;
-}
-
-/* 等待指示：只占一层薄薄的呼吸光点，避免大图解码时露出纯黑舞台 */
-.image-pending {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  pointer-events: none;
-  /* 延迟 300ms 才浮现：小图/缓存命中时几乎瞬间就好，不该闪一下转圈 */
-  animation: pending-in 0.18s ease 0.3s both;
-}
-
-@keyframes pending-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-.pending-ring {
-  width: 26px;
-  height: 26px;
-  border: 2px solid rgba(148, 163, 184, 0.28);
-  border-top-color: rgba(148, 163, 184, 0.85);
-  border-radius: 50%;
-  animation: pending-spin 0.8s linear infinite;
-}
-
-@keyframes pending-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pending-ring {
-    animation: none;
-    border-top-color: rgba(148, 163, 184, 0.5);
-  }
+  transition: transform 0.12s ease-out;
 }
 
 .image-stage.dragging .viewer-image,
-.image-stage.pinching .viewer-image,
-.image-stage.resizing .viewer-image {
+.image-stage.pinching .viewer-image {
   transition: none;
 }
 
