@@ -357,18 +357,6 @@ export async function handleUploadChunk(request: Request, env: Env): Promise<Res
       return errors.quotaExceeded();
     }
 
-    if (parentId) {
-      const parentFolder = await env.DB.prepare(
-        'SELECT id FROM files WHERE id = ? AND user_id = ? AND type = ? AND deleted_at IS NULL'
-      )
-        .bind(parentId, auth.user.id, 'folder')
-        .first();
-
-      if (!parentFolder) {
-        return errors.notFound('Parent folder not found');
-      }
-    }
-
     const prefix = uploadPrefix(auth.user.id, sessionId);
     let meta = await getUploadMeta(env, prefix);
 
@@ -376,6 +364,20 @@ export async function handleUploadChunk(request: Request, env: Env): Promise<Res
     if (!meta) {
       if (chunkIndex !== 0) {
         return errors.uploadSessionMissing();
+      }
+
+      // 父目录校验只在建会话时做一次：后续分片沿用 meta.parentId，
+      // 不必每片都往 D1 打一次「目录是否存在」的查询（100MB 文件能省 7 次往返）
+      if (parentId) {
+        const parentFolder = await env.DB.prepare(
+          'SELECT id FROM files WHERE id = ? AND user_id = ? AND type = ? AND deleted_at IS NULL'
+        )
+          .bind(parentId, auth.user.id, 'folder')
+          .first();
+
+        if (!parentFolder) {
+          return errors.notFound('Parent folder not found');
+        }
       }
 
       const fileId = crypto.randomUUID();
@@ -405,7 +407,9 @@ export async function handleUploadChunk(request: Request, env: Env): Promise<Res
 
     // 上传分片到 R2，etag 落成独立对象（无共享状态，可并发）
     const upload = env.R2.resumeMultipartUpload(meta.r2Key, meta.uploadId);
+    const r2Start = Date.now();
     const part = await upload.uploadPart(chunkIndex + 1, chunk.stream());
+    const timing = { 'Server-Timing': `r2;dur=${Date.now() - r2Start}` };
     await putUploadPart(env, prefix, chunkIndex, part.etag);
 
     // 如果是最后一片，完成上传
@@ -474,7 +478,7 @@ export async function handleUploadChunk(request: Request, env: Env): Promise<Res
           updated_at: now,
           thumb_url: null,
         },
-      }, { status: 201 });
+      }, { status: 201, headers: timing });
     }
 
     // 返回分片上传成功
@@ -482,7 +486,7 @@ export async function handleUploadChunk(request: Request, env: Env): Promise<Res
       success: true,
       chunkIndex,
       totalChunks,
-    });
+    }, { headers: timing });
   } catch (e) {
     console.error('Upload chunk error:', e);
     return errors.serverError('Failed to upload chunk');
@@ -573,17 +577,28 @@ export async function handleDownload(request: Request, env: Env, fileId?: string
   }
 
   try {
+    const dbStart = Date.now();
+    // 一次查出 size：Range 要靠它算边界，否则得先 R2.head 一次、多一个往返
     const file = await env.DB.prepare(
-      'SELECT name, r2_key, mime_type FROM files WHERE id = ? AND user_id = ? AND type = ? AND deleted_at IS NULL'
+      'SELECT name, r2_key, mime_type, size FROM files WHERE id = ? AND user_id = ? AND type = ? AND deleted_at IS NULL'
     )
       .bind(fileId, auth.user.id, 'file')
-      .first<{ name: string; r2_key: string; mime_type: string }>();
+      .first<{ name: string; r2_key: string; mime_type: string; size: number }>();
 
     if (!file) {
       return errors.notFound('File not found');
     }
+    const dbMs = Date.now() - dbStart;
 
-    const obj = await env.R2.get(file.r2_key);
+    // 支持 Range：前端对大文件并发多段下载，吞吐比单连接高得多
+    const range = request.method === 'GET' ? parseRange(request.headers.get('Range'), file.size) : null;
+
+    const r2Start = Date.now();
+    const obj = range
+      ? await env.R2.get(file.r2_key, { range: { offset: range.offset, length: range.length } })
+      : await env.R2.get(file.r2_key);
+    const r2Ms = Date.now() - r2Start;
+
     if (!obj) {
       return errors.notFound('File not found in storage');
     }
@@ -591,9 +606,18 @@ export async function handleDownload(request: Request, env: Env, fileId?: string
     const headers = new Headers();
     headers.set('Content-Type', file.mime_type || 'application/octet-stream');
     headers.set('Content-Disposition', contentDisposition(file.name, 'attachment'));
-    headers.set('Content-Length', String(obj.size));
     headers.set('X-Content-Type-Options', 'nosniff');
+    headers.set('Accept-Ranges', 'bytes');
+    // 把服务端耗时拆开暴露出来，方便在 DevTools 的 Timing 面板里区分「D1 慢」还是「R2 慢」
+    headers.set('Server-Timing', `db;dur=${dbMs}, r2;dur=${r2Ms}`);
 
+    if (range) {
+      headers.set('Content-Range', `bytes ${range.start}-${range.end}/${file.size}`);
+      headers.set('Content-Length', String(range.length));
+      return new Response(obj.body, { status: 206, headers });
+    }
+
+    headers.set('Content-Length', String(obj.size));
     return new Response(obj.body, { headers });
   } catch (e) {
     console.error('Download error:', e);

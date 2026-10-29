@@ -119,7 +119,7 @@ function formatDate(timestamp: number): string {
 /**
  * 上传项右侧的状态文案。
  *
- * 队列是串行处理的，排在后面的任务在轮到自己之前进度恒为 0——
+ * 队列最多同时跑 3 个任务，排在后面的任务在轮到自己之前进度恒为 0——
  * 直接显示 "0%" 会被误读成"卡住了/没有进度"，所以待传的明确标成 Queued。
  */
 function uploadStatusText(task: UploadTask): string {
@@ -311,6 +311,8 @@ async function downloadFile(file: FileItem) {
   try {
     await downloadWithProgress(`/api/files/${file.id}/download`, file.name, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      // 已知大小才能对大文件启用多段并行下载
+      expectedSize: file.size,
       onProgress: (progress) => {
         downloads[file.id] = { percent: progress.percent, done: false };
       },

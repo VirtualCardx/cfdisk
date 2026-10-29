@@ -16,7 +16,6 @@ export interface UploadTask {
 
 export const useUploadStore = defineStore('upload', () => {
   const queue = ref<UploadTask[]>([]);
-  const isUploading = ref(false);
 
   /**
    * 缩略图作业状态，供 FileThumb 判断「这张图是刚传的，别去下载原图回填」。
@@ -33,7 +32,19 @@ export const useUploadStore = defineStore('upload', () => {
 
   const activeUploads = computed(() => queue.value.filter((t) => t.status === 'uploading').length);
 
+  /** 有任务在飞即视为「正在上传」 */
+  const isUploading = computed(() => activeUploads.value > 0);
+
   const pendingUploads = computed(() => queue.value.filter((t) => t.status === 'pending').length);
+
+  /**
+   * 同时进行的上传任务数。
+   *
+   * 之前是严格串行：一个任务传完才轮到下一个，选 20 张小图上传的总耗时
+   * 等于 20 个请求的耗时之和。浏览器对同一域名允许 6 个并发连接，
+   * 这里用 3 个槽位跑文件、剩下留给列表刷新和缩略图，互不抢占。
+   */
+  const MAX_CONCURRENT_UPLOADS = 3;
 
   /**
    * 批量上传的文件数目统计，供进度面板显示「总共 / 已上传 / 剩余」。
@@ -89,35 +100,38 @@ export const useUploadStore = defineStore('upload', () => {
       status: 'pending',
     }));
     queue.value.push(...newTasks);
+    pump();
+  }
 
-    if (!isUploading.value) {
-      processQueue();
+  /**
+   * 把空闲的并发槽位填满。
+   *
+   * 状态在同步阶段就切成 uploading，所以 while 循环里不会再选中同一个任务；
+   * 任务结束后再次调用本函数领取下一个，整体行为等价于固定大小的任务池。
+   */
+  function pump(): void {
+    while (activeUploads.value < MAX_CONCURRENT_UPLOADS) {
+      const next = queue.value.find((t) => t.status === 'pending');
+      if (!next) return;
+
+      next.status = 'uploading';
+      next.progress = 0;
+      void runTask(next);
     }
   }
 
-  async function processQueue(): Promise<void> {
-    if (isUploading.value) return;
-
-    const pendingTask = queue.value.find((t) => t.status === 'pending');
-    if (!pendingTask) {
-      isUploading.value = false;
-      return;
-    }
-
-    isUploading.value = true;
-    pendingTask.status = 'uploading';
-
+  async function runTask(task: UploadTask): Promise<void> {
     try {
-      await uploadFile(pendingTask);
-      pendingTask.status = 'completed';
-      pendingTask.progress = 100;
+      await uploadFile(task);
+      task.status = 'completed';
+      task.progress = 100;
     } catch (e) {
-      pendingTask.status = 'error';
-      pendingTask.error = e instanceof Error ? e.message : 'Upload failed';
+      task.status = 'error';
+      task.error = e instanceof Error ? e.message : 'Upload failed';
     }
 
-    isUploading.value = false;
-    processQueue();
+    // 单个任务失败不影响其它任务，继续领取下一个
+    pump();
   }
 
   async function uploadFile(task: UploadTask): Promise<void> {
@@ -241,7 +255,7 @@ export const useUploadStore = defineStore('upload', () => {
       task.status = 'pending';
       task.progress = 0;
       task.error = undefined;
-      processQueue();
+      pump();
     }
   }
 
@@ -256,7 +270,7 @@ export const useUploadStore = defineStore('upload', () => {
     stats,
     isBatch,
     addToQueue,
-    processQueue,
+    pump,
     removeTask,
     clearCompleted,
     retryTask,

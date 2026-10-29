@@ -504,6 +504,8 @@ async function download() {
   try {
     await downloadWithProgress(`/api/files/${target.id}/download`, target.name, {
       headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+      // 已知大小才能对大文件启用多段并行下载
+      expectedSize: target.size,
       onProgress: (progress) => {
         downloadPercent.value = progress.percent;
       },
