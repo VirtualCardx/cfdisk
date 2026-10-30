@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useUIStore } from '@/stores/ui';
@@ -8,6 +8,84 @@ const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
 const uiStore = useUIStore();
+
+/**
+ * 移动端底栏的自动收起 / 弹出。
+ *
+ * 手机上底栏是 fixed 在底部的，浏览长列表时它会永久占掉 60px。
+ * 这里按滚动方向做经典行为：向下滚（往后看内容）收起，向上滚（往回找东西）弹出。
+ * 顶部和底部强制显示——否则用户在页面两端会找不到导航入口。
+ * 只在 ≤768px 生效，桌面侧栏完全不受影响。
+ */
+const MOBILE_QUERY = '(max-width: 768px)';
+/** 累计位移超过该值才切换，过滤触摸板/回弹产生的细微抖动 */
+const SCROLL_THRESHOLD = 8;
+/** 距离顶部这么近时永远显示底栏 */
+const TOP_ANCHOR = 64;
+
+const isMobile = ref(false);
+const navHidden = ref(false);
+
+let mediaQuery: MediaQueryList | null = null;
+let lastY = 0;
+let framePending = false;
+
+function applyScrollState(): void {
+  framePending = false;
+
+  if (!isMobile.value) {
+    navHidden.value = false;
+    return;
+  }
+
+  const y = Math.max(window.scrollY, 0);
+  const delta = y - lastY;
+
+  // 位移不足时不更新基准值：连续小幅滚动累计起来仍能触发
+  if (Math.abs(delta) < SCROLL_THRESHOLD) return;
+
+  const atTop = y <= TOP_ANCHOR;
+  const atBottom = y + window.innerHeight >= document.documentElement.scrollHeight - 4;
+
+  lastY = y;
+  navHidden.value = !atTop && !atBottom && delta > 0;
+}
+
+function onScroll(): void {
+  if (framePending) return;
+  framePending = true;
+  requestAnimationFrame(applyScrollState);
+}
+
+function onMediaChange(event: MediaQueryListEvent): void {
+  isMobile.value = event.matches;
+  if (!event.matches) navHidden.value = false;
+  lastY = window.scrollY;
+  applyScrollState();
+}
+
+onMounted(() => {
+  mediaQuery = window.matchMedia(MOBILE_QUERY);
+  isMobile.value = mediaQuery.matches;
+  lastY = window.scrollY;
+  mediaQuery.addEventListener('change', onMediaChange);
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('resize', onScroll, { passive: true });
+});
+
+onBeforeUnmount(() => {
+  mediaQuery?.removeEventListener('change', onMediaChange);
+  window.removeEventListener('scroll', onScroll);
+  window.removeEventListener('resize', onScroll);
+});
+
+// 切换页面后重新露出底栏，避免停留在收起态让用户以为导航消失了
+watch(
+  () => route.fullPath,
+  () => {
+    navHidden.value = false;
+  }
+);
 
 const currentPage = computed(() => {
   if (route.name === 'trash') return 'trash';
@@ -35,7 +113,7 @@ function openChangePassword() {
 </script>
 
 <template>
-  <aside class="sidebar" :class="{ collapsed: !uiStore.sidebarOpen }">
+  <aside class="sidebar" :class="{ collapsed: !uiStore.sidebarOpen, 'nav-hidden': navHidden }">
     <div class="sidebar-header">
       <h1 class="logo">CFDisk</h1>
       <button class="toggle-btn" @click="uiStore.toggleSidebar">
@@ -135,7 +213,8 @@ function openChangePassword() {
   color: #e5e5e5;
   display: flex;
   flex-direction: column;
-  transition: width 0.3s ease;
+  /* transform 只服务移动端底栏的收起/弹出，桌面端不会变 */
+  transition: width 0.3s ease, transform 0.25s ease;
   position: fixed;
   left: 0;
   top: 0;
@@ -372,6 +451,12 @@ button.nav-item {
     width: 100%;
   }
 
+  /* 向下滚动时整条底栏滑出屏幕；滑出后禁用点击，避免点到屏幕外的元素 */
+  .sidebar.nav-hidden {
+    transform: translateY(100%);
+    pointer-events: none;
+  }
+
   .sidebar-header {
     display: none;
   }
@@ -429,6 +514,13 @@ button.nav-item {
 
   .nav-item {
     padding: 0.5rem;
+  }
+}
+
+/* 偏好减少动效的用户：收起/弹出直接切换，不做位移过渡 */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
   }
 }
 </style>
