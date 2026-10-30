@@ -55,8 +55,16 @@ export async function handleListFiles(request: Request, env: Env): Promise<Respo
   const sort = url.searchParams.get('sort') || 'name';
   const order = url.searchParams.get('order') || 'asc';
 
-  const validSorts = ['name', 'size', 'created_at', 'updated_at'];
-  const sortColumn = validSorts.includes(sort) ? sort : 'name';
+  // 前端也会本地排序，这里保持一致：支持名称/大小/时间/类型；
+  // 类型排序落到 mime_type 列上（同一类文件才会挨在一起）
+  const sortColumns: Record<string, string> = {
+    name: 'name',
+    size: 'size',
+    created_at: 'created_at',
+    updated_at: 'updated_at',
+    type: 'mime_type',
+  };
+  const sortColumn = sortColumns[sort] ?? 'name';
   const sortOrder = order === 'desc' ? 'DESC' : 'ASC';
 
   try {
@@ -79,10 +87,10 @@ export async function handleListFiles(request: Request, env: Env): Promise<Respo
     const query = parentId
       ? `SELECT id, parent_id, name, type, mime_type, size, thumb_r2_key, created_at, updated_at
          FROM files WHERE user_id = ? AND parent_id = ? AND deleted_at IS NULL
-         ORDER BY type DESC, ${sortColumn} ${sortOrder}`
+         ORDER BY type DESC, ${sortColumn} ${sortOrder}, name ASC`
       : `SELECT id, parent_id, name, type, mime_type, size, thumb_r2_key, created_at, updated_at
          FROM files WHERE user_id = ? AND parent_id IS NULL AND deleted_at IS NULL
-         ORDER BY type DESC, ${sortColumn} ${sortOrder}`;
+         ORDER BY type DESC, ${sortColumn} ${sortOrder}, name ASC`;
 
     const stmt = parentId
       ? env.DB.prepare(query).bind(auth.user.id, parentId)

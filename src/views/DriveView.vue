@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onMounted } from 'vue';
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AppLayout from '@/components/layout/AppLayout.vue';
 import FileThumb from '@/components/files/FileThumb.vue';
 import ContextMenu from '@/components/drive/ContextMenu.vue';
-import { useFilesStore, type FileItem, type PathItem } from '@/stores/files';
+import { useFilesStore, type FileItem, type PathItem, type SortField } from '@/stores/files';
 import { useUploadStore, type UploadTask } from '@/stores/upload';
 import { useUIStore } from '@/stores/ui';
 import { api } from '@/api/client';
@@ -54,6 +54,42 @@ const searching = ref(false);
 const searchInputRef = ref<HTMLInputElement | null>(null);
 let searchTimer: number | undefined;
 
+// 排序
+const SORT_OPTIONS: { value: SortField; label: string }[] = [
+  { value: 'name', label: 'Name' },
+  { value: 'size', label: 'Size' },
+  { value: 'updated_at', label: 'Modified' },
+  { value: 'type', label: 'Type' },
+];
+const sortOpen = ref(false);
+const sortWrap = ref<HTMLElement | null>(null);
+
+const sortFieldLabel = computed(
+  () => SORT_OPTIONS.find((o) => o.value === filesStore.sortBy)?.label ?? 'Name'
+);
+const sortArrow = computed(() => (filesStore.sortOrder === 'asc' ? '↑' : '↓'));
+
+/**
+ * 点菜单里的字段：换字段就按该字段的默认方向排；
+ * 点的是当前字段则只翻转方向——不用先切走再切回来。
+ */
+function chooseSort(field: SortField): void {
+  if (filesStore.sortBy === field) {
+    filesStore.toggleSortOrder();
+    return;
+  }
+  filesStore.setSort(field);
+}
+
+function onSortOutside(event: PointerEvent): void {
+  if (!sortOpen.value) return;
+  if (!sortWrap.value?.contains(event.target as Node)) sortOpen.value = false;
+}
+
+function onSortKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && sortOpen.value) sortOpen.value = false;
+}
+
 const moveTargetName = computed(() => {
   if (!moveTargetId.value) return 'My Files';
   return movePath.value.find((node) => node.id === moveTargetId.value)?.name ?? 'Selected folder';
@@ -61,6 +97,13 @@ const moveTargetName = computed(() => {
 
 onMounted(() => {
   loadFiles();
+  document.addEventListener('pointerdown', onSortOutside);
+  document.addEventListener('keydown', onSortKeydown);
+});
+
+onUnmounted(() => {
+  document.removeEventListener('pointerdown', onSortOutside);
+  document.removeEventListener('keydown', onSortKeydown);
 });
 
 watch(() => route.params.id, () => {
@@ -591,6 +634,58 @@ async function deleteSelectedFiles() {
         </nav>
 
         <div class="header-actions">
+          <div v-if="!searchQuery.trim()" ref="sortWrap" class="sort-control">
+            <button
+              type="button"
+              class="btn-icon sort-btn"
+              :class="{ active: sortOpen }"
+              :aria-expanded="sortOpen"
+              aria-haspopup="listbox"
+              :aria-label="`Sort by ${sortFieldLabel}, ${filesStore.sortOrder === 'asc' ? 'ascending' : 'descending'}`"
+              title="Sort"
+              @click="sortOpen = !sortOpen"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M7 4v16"/><path d="M4 7l3-3 3 3"/>
+                <path d="M17 20V4"/><path d="M14 17l3 3 3-3"/>
+              </svg>
+              <span class="sort-btn-label">{{ sortFieldLabel }}</span>
+              <span class="sort-dir" aria-hidden="true">{{ sortArrow }}</span>
+            </button>
+
+            <div v-if="sortOpen" class="sort-menu" role="listbox" aria-label="Sort by">
+              <div class="sort-menu-head">Sort by</div>
+              <button
+                v-for="option in SORT_OPTIONS"
+                :key="option.value"
+                type="button"
+                role="option"
+                class="sort-option"
+                :class="{ active: filesStore.sortBy === option.value }"
+                :aria-selected="filesStore.sortBy === option.value"
+                @click="chooseSort(option.value)"
+              >
+                <span class="sort-option-label">{{ option.label }}</span>
+                <svg
+                  v-if="filesStore.sortBy === option.value"
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <line x1="12" y1="19" x2="12" y2="5"/>
+                  <polyline v-if="filesStore.sortOrder === 'asc'" points="6 11 12 5 18 11"/>
+                  <polyline v-else points="6 13 12 19 18 13"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
           <div class="search-box">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -1189,6 +1284,84 @@ async function deleteSelectedFiles() {
   color: #1e40af;
 }
 
+/* 排序控件 */
+.sort-control {
+  position: relative;
+}
+
+.sort-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  white-space: nowrap;
+}
+
+.sort-btn.active {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1e40af;
+}
+
+.sort-btn-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.sort-dir {
+  font-size: 0.75rem;
+  line-height: 1;
+  color: currentColor;
+  opacity: 0.75;
+}
+
+.sort-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  min-width: 176px;
+  padding: 0.375rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+}
+
+.sort-menu-head {
+  padding: 0.25rem 0.5rem 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.sort-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 0.875rem;
+  color: #334155;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sort-option:hover {
+  background: #f1f5f9;
+}
+
+.sort-option.active {
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
 .btn-primary {
   background: #1e40af;
   color: #fff;
@@ -1281,6 +1454,28 @@ async function deleteSelectedFiles() {
     max-width: 100%;
   }
 
+  /* 工具栏在窄屏本来就要换行，排序按钮只留图标 + 方向，
+     当前字段在展开的菜单里用对勾 + 箭头标记 */
+  .sort-btn-label {
+    display: none;
+  }
+
+  .sort-btn {
+    padding: 0.625rem 0.5rem;
+  }
+
+  /* 多了排序按钮后，固定 180px 的搜索框会把 Upload 挤到单独一行；
+     让它可收缩，四个控件能收在一行里 */
+  .search-box {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
+
+  .search-box input {
+    width: 100%;
+    min-width: 0;
+  }
+
   .file-grid {
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     gap: 0.75rem;
@@ -1304,6 +1499,15 @@ async function deleteSelectedFiles() {
    面板压在底部导航栏上、最后一个上传项被遮住。 */
 
 @media (max-width: 480px) {
+  /* 小屏把工具栏间距和上传按钮收紧，四个控件才排得进一行 */
+  .header-actions {
+    gap: 0.5rem;
+  }
+
+  .header-actions .btn-primary {
+    padding: 0.625rem 0.875rem;
+  }
+
   .file-grid {
     grid-template-columns: repeat(2, 1fr);
     gap: 0.5rem;
@@ -1332,6 +1536,13 @@ async function deleteSelectedFiles() {
 
   .btn-primary {
     padding: 0.625rem;
+  }
+}
+
+/* 360px 这类更窄的屏幕：搜索框再让一点宽度，四个控件仍能排一行 */
+@media (max-width: 400px) {
+  .search-box {
+    flex-basis: 110px;
   }
 }
 
